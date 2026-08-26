@@ -40,6 +40,12 @@ enum CommandLineTool {
                                   ?? Store.defaultPath)
             switch command {
             case "ingest":  try ingest(store)
+            case "backfill":
+                try store.resetCursors()
+                print("kursory wyzerowane — pełne przejście po logach")
+                try ingest(store)
+                try compactionsReport(store)
+            case "compactions": try compactionsReport(store)
             case "totals":  try totals(store, since: options["since"])
             case "threads": try threads(store, since: options["since"])
             case "limits":  try limits(store)
@@ -64,6 +70,8 @@ enum CommandLineTool {
           --totals  [--db PATH] [--since ISO] sumy tokenów per aplikacja
           --threads [--db PATH] [--since ISO] najcięższe wątki
           --limits                            odczytaj limity na żywo
+          --compactions [--db PATH]           kompakty kontekstu i ich szacowany koszt
+          --backfill    [--db PATH]           wyzeruj kursory i przejdź logi od nowa
         """)
     }
 
@@ -110,6 +118,23 @@ enum CommandLineTool {
                          Format.tokens(thread.totals.total) as NSString,
                          Format.project(thread.cwd) as NSString,
                          String(thread.displayTitle.prefix(70)) as NSString))
+        }
+    }
+
+    private static func compactionsReport(_ store: Store) throws {
+        let rows = try store.compactions()
+        guard !rows.isEmpty else { print("brak zarejestrowanych kompaktów"); return }
+        for app in AppKind.allCases {
+            let mine = rows.filter { $0.app == app }
+            guard !mine.isEmpty else { continue }
+            let pre = mine.reduce(0) { $0 + $1.preTokens }
+            print("\(app.display): \(mine.count) kompaktów, "
+                  + "~\(Format.tokensFull(pre)) tokenów kontekstu przepuszczonego "
+                  + "(nie ma tego w usage_events)")
+            for row in mine.prefix(5) {
+                print("  \(Format.when(row.ts))  \(row.trigger ?? "—")  "
+                      + "\(Format.tokens(row.preTokens)) → \(Format.tokens(row.postTokens))")
+            }
         }
     }
 

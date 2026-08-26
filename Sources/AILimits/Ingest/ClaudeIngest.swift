@@ -29,6 +29,7 @@ struct ClaudeIngest {
             guard let cursor = store.cursor(for: path, app: .claude) else { continue }
 
             var events: [UsageEvent] = []
+            var compactions: [Compaction] = []
             var sessions = SessionAccumulator()
             var lastPosition = cursor.offset
 
@@ -36,13 +37,31 @@ struct ClaudeIngest {
                 lastPosition = position
                 bytesRead += line.count + 1
 
-                guard line.contains(ascii: Marker.usage) || line.contains(ascii: Marker.aiTitle)
+                guard line.contains(ascii: Marker.usage)
+                        || line.contains(ascii: Marker.aiTitle)
+                        || line.contains(ascii: Marker.compactBoundary)
                 else { return }
                 guard let root = (try? JSONSerialization.jsonObject(with: line)) as? JSONObject
                 else { return }
 
                 let kind = root.string("type")
                 guard let sessionID = root.string("sessionId") else { return }
+
+                // The compaction call itself never appears as an assistant
+                // message with a usage block, so this record is the only trace
+                // of what it cost.
+                if root.string("subtype") == "compact_boundary",
+                   let metadata = root.object("compactMetadata"),
+                   let timestamp = Timestamps.parse(root.string("timestamp")) {
+                    compactions.append(Compaction(
+                        app: .claude, sessionID: sessionID, ts: timestamp,
+                        trigger: metadata.string("trigger"),
+                        preTokens: metadata.int("preTokens") ?? 0,
+                        postTokens: metadata.int("postTokens") ?? 0,
+                        dropped: metadata.int("cumulativeDroppedTokens") ?? 0,
+                        durationMs: metadata.int("durationMs") ?? 0))
+                    return
+                }
 
                 if kind == "ai-title" {
                     sessions.note(app: .claude, sessionID: sessionID, title: root.string("aiTitle"))
@@ -78,6 +97,7 @@ struct ClaudeIngest {
             }
 
             try store.add(events: events)
+            try store.add(compactions: compactions)
             try sessions.flush(into: store)
             try store.saveCursor(path: path, app: .claude,
                                  cursor: FileCursor(offset: lastPosition,

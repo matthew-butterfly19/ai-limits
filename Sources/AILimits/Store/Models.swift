@@ -55,6 +55,28 @@ struct SessionInfo: Sendable {
     }
 }
 
+/// One context compaction.
+///
+/// Neither vendor logs the compaction request's own token usage: Claude Code
+/// writes a `compact_boundary` record with no usage block, and Codex emits a
+/// `token_count` of literally zero next to its `compacted` record. The cost is
+/// real — the call re-reads the whole conversation — but it is invisible in the
+/// usage stream, which is why these numbers live apart from it and are labelled
+/// as an estimate wherever they are shown.
+struct Compaction: Sendable {
+    var app: AppKind
+    var sessionID: String
+    var ts: Date
+    /// "manual" / "auto" for Claude; nil for Codex, which does not say.
+    var trigger: String?
+    /// Context size going in — roughly what the compaction call had to read.
+    var preTokens: Int
+    /// Context size coming out.
+    var postTokens: Int
+    var dropped: Int
+    var durationMs: Int
+}
+
 /// One reading of a rate-limit window, as reported by the vendor.
 struct LimitSample: Sendable {
     var ts: Date

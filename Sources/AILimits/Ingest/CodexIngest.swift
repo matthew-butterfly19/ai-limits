@@ -41,7 +41,12 @@ struct CodexIngest {
             var sessionID = Self.sessionID(fromFilename: path)
 
             var events: [UsageEvent] = []
+            var compactions: [Compaction] = []
             var sessions = SessionAccumulator()
+            // Codex does not report how big the context was when it compacted,
+            // so the last request's input size stands in for it. Stays 0 when
+            // the scan resumes past that record.
+            var lastContextTokens = 0
             var lastPosition = cursor.offset
 
             try LineReader.forEachLine(path: path, from: cursor.offset) { line, position in
@@ -52,6 +57,7 @@ struct CodexIngest {
                 guard line.contains(ascii: Marker.tokenCount)
                         || line.contains(ascii: Marker.sessionMeta)
                         || line.contains(ascii: Marker.threadGoal)
+                        || line.contains(ascii: Marker.compacted)
                         || (needTitle && line.contains(ascii: Marker.inputText))
                 else { return }
                 guard let root = (try? JSONSerialization.jsonObject(with: line)) as? JSONObject
@@ -59,6 +65,18 @@ struct CodexIngest {
 
                 let payload = root.object("payload") ?? [:]
                 let payloadType = payload.string("type")
+
+                // The `token_count` Codex emits beside a compaction reads
+                // literally zero, so the call's own cost is invisible here too.
+                if root.string("type") == "compacted", let sessionID,
+                   let timestamp = Timestamps.parse(root.string("timestamp")) {
+                    compactions.append(Compaction(
+                        app: .codex, sessionID: sessionID, ts: timestamp,
+                        trigger: nil, preTokens: lastContextTokens,
+                        postTokens: 0, dropped: max(lastContextTokens, 0), durationMs: 0))
+                    lastContextTokens = 0
+                    return
+                }
 
                 if root.string("type") == "session_meta" {
                     sessionID = payload.string("session_id") ?? payload.string("id") ?? sessionID
@@ -104,6 +122,7 @@ struct CodexIngest {
                 // not. Normalise so the two apps' columns mean the same thing.
                 let cached = last.int("cached_input_tokens") ?? 0
                 let input = last.int("input_tokens") ?? 0
+                if input > 0 { lastContextTokens = input }
 
                 events.append(UsageEvent(
                     app: .codex,
@@ -140,6 +159,7 @@ struct CodexIngest {
             }
 
             try store.add(events: events)
+            try store.add(compactions: compactions)
             try sessions.flush(into: store)
             try store.saveCursor(path: path, app: .codex,
                                  cursor: FileCursor(offset: lastPosition,

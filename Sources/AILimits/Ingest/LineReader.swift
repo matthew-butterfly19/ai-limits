@@ -72,4 +72,6 @@ enum Marker {
     static let sessionMeta = Array(#""session_meta""#.utf8)
     static let threadGoal = Array(#""thread_goal_updated""#.utf8)
     static let inputText  = Array(#""input_text""#.utf8)
+    static let compactBoundary = Array(#""compact_boundary""#.utf8)
+    static let compacted  = Array(#""compacted""#.utf8)
 }

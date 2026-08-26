@@ -15,6 +15,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var windowTotals: [AppKind: TokenTotals] = [:]
     @Published private(set) var burnRates: [AppKind: StatsEngine.BurnRate] = [:]
     @Published private(set) var threads: [StatsEngine.ThreadRow] = []
+    @Published private(set) var compactions: [AppKind: [Compaction]] = [:]
     /// Fixed once from the whole history, never re-derived per view.
     @Published private(set) var modelColors = ModelColors(models: [])
     @Published private(set) var lastRefresh: Date?
@@ -88,6 +89,8 @@ final class AppModel: ObservableObject {
             burnRates[app] = (try? stats.burnRate(app: app, minutes: 300)) ?? nil
         }
         threads = (try? stats.threadRows(since: earliestWindowStart(), limit: 12)) ?? []
+        let compacted = (try? store.compactions(since: earliestWindowStart())) ?? []
+        compactions = Dictionary(grouping: compacted, by: \.app)
         if let models = try? store.distinctModels(), models.count != modelColors.count {
             modelColors = ModelColors(models: models)
         }

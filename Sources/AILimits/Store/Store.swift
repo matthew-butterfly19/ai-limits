@@ -73,6 +73,22 @@ final class Store {
         PRIMARY KEY (ts, app, window_mins)
     );
     CREATE INDEX IF NOT EXISTS idx_limits_ts ON limit_samples (ts);
+
+    -- Kompaktowanie kontekstu. Osobna tabela, nie usage_events: własnego kosztu
+    -- kompaktu żaden log nie raportuje jako zużycia, więc to szacunek z
+    -- metadanych i nie wolno mu wsiąkać w liczby, które zgadzają się co do tokena.
+    CREATE TABLE IF NOT EXISTS compactions (
+        app         TEXT NOT NULL,
+        session_id  TEXT NOT NULL,
+        ts          REAL NOT NULL,
+        trigger     TEXT,
+        pre_tokens  INTEGER NOT NULL DEFAULT 0,
+        post_tokens INTEGER NOT NULL DEFAULT 0,
+        dropped     INTEGER NOT NULL DEFAULT 0,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (app, session_id, ts)
+    );
+    CREATE INDEX IF NOT EXISTS idx_compactions_ts ON compactions (ts);
     """
 }
 
@@ -177,6 +193,28 @@ extension Store {
             stmt.bindAll([session.app.rawValue, session.sessionID, session.title,
                           session.cwd, session.origin, session.firstTS, session.lastTS])
             try stmt.run()
+        }
+    }
+
+    @discardableResult
+    func add(compactions rows: [Compaction]) throws -> Int {
+        guard !rows.isEmpty else { return 0 }
+        return try sync { db in
+            try db.transaction {
+                let stmt = try db.prepare("""
+                    INSERT OR IGNORE INTO compactions
+                        (app, session_id, ts, trigger, pre_tokens, post_tokens, dropped, duration_ms)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """)
+                var inserted = 0
+                for row in rows {
+                    stmt.bindAll([row.app.rawValue, row.sessionID, row.ts, row.trigger,
+                                  row.preTokens, row.postTokens, row.dropped, row.durationMs])
+                    try stmt.run()
+                    inserted += db.changes
+                }
+                return inserted
+            }
         }
     }
 

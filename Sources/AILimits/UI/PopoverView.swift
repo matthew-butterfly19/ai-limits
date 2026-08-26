@@ -75,6 +75,7 @@ struct AppSection: View {
                     .foregroundStyle(Palette.serious)
             }
             meters
+            compactionNote
             if !threads.isEmpty {
                 sectionLabel("Wątki w tym oknie")
                 ForEach(threads.prefix(5)) { row in
@@ -154,6 +155,29 @@ struct AppSection: View {
                         .frame(width: 34, alignment: .trailing)
                 }
             }
+        }
+    }
+
+    /// Neither vendor bills the compaction call through the usage stream, so
+    /// this is stated as what it is — context the limit saw and the counters
+    /// above did not.
+    @ViewBuilder private var compactionNote: some View {
+        let rows = model.compactions[app] ?? []
+        if !rows.isEmpty {
+            let context = rows.reduce(0) { $0 + $1.preTokens }
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    .font(.system(size: 8)).foregroundStyle(Palette.muted)
+                Text("\(rows.count) × kompakt kontekstu · ~\(Format.tokens(context)) "
+                     + "przeczytane przy kompaktowaniu, poza licznikami powyżej")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Palette.muted)
+            }
+            .help("""
+                  Ani Claude Code, ani Codex nie zapisują zużycia samego wywołania
+                  kompaktującego: Claude zostawia rekord compact_boundary bez bloku
+                  usage, Codex – token_count z zerami. Limit to jednak odczuł.
+                  """)
         }
     }
 

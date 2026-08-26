@@ -244,6 +244,40 @@ extension Store {
         return buckets.values.sorted { $0.hourStart < $1.hourStart }
     }
 
+    /// Compactions in the period, newest first.
+    func compactions(since: Date? = nil, app: AppKind? = nil) throws -> [Compaction] {
+        var sql = """
+            SELECT app, session_id, ts, trigger, pre_tokens, post_tokens, dropped, duration_ms
+            FROM compactions WHERE 1 = 1
+            """
+        var bindings: [Any?] = []
+        if let since { sql += " AND ts >= ?"; bindings.append(since) }
+        if let app { sql += " AND app = ?"; bindings.append(app.rawValue) }
+        sql += " ORDER BY ts DESC"
+
+        return try sync { db in
+            var rows: [Compaction] = []
+            let stmt = try db.prepare(sql)
+            stmt.bindAll(bindings)
+            try stmt.forEachRow { row in
+                guard let app = row.string(0).flatMap(AppKind.init(rawValue:)),
+                      let sessionID = row.string(1), let ts = row.date(2) else { return }
+                rows.append(Compaction(app: app, sessionID: sessionID, ts: ts,
+                                       trigger: row.string(3), preTokens: row.int(4),
+                                       postTokens: row.int(5), dropped: row.int(6),
+                                       durationMs: row.int(7)))
+            }
+            return rows
+        }
+    }
+
+    /// Wipes the byte cursors so the next pass re-reads every log from the
+    /// start. Safe by construction: every insert is keyed and ignored on
+    /// conflict, so a re-read adds only what was missing.
+    func resetCursors() throws {
+        try sync { db in try db.execute("DELETE FROM files") }
+    }
+
     func limitHistory(since: Date, app: AppKind? = nil) throws -> [LimitSample] {
         var sql = "SELECT ts, app, window_mins, pct, resets_at FROM limit_samples WHERE ts >= ?"
         var bindings: [Any?] = [since]

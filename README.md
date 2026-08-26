@@ -37,6 +37,26 @@ Deduplikujemy po `(message.id, requestId)`, więc wynik jest niższy niż to, co
 Klucz jest `PRIMARY KEY`, a zapis idzie przez `INSERT OR IGNORE` — ponowne wczytanie
 dowolnego pliku niczego nie podwaja.
 
+## Kompaktowanie kontekstu — ślepy punkt obu logów
+
+Kiedy Claude Code albo Codex kompaktuje kontekst, samo wywołanie kompaktujące
+przeczytuje całą rozmowę — i **żaden z logów nie zapisuje jego zużycia**.
+Claude zostawia rekord `compact_boundary` bez bloku `usage`, Codex — `token_count`
+z zerami. Limit po stronie dostawcy to odczuwa, `usage_events` nie.
+
+Dlatego kompakty siedzą w osobnej tabeli `compactions`, razem z tym, co logi jednak
+podają (`preTokens`, `postTokens`, `trigger`, `durationMs` u Claude'a; rozmiar
+ostatniego requestu przed granicą u Codeksa). Aplikacja pokazuje je jako osobną
+linijkę, nigdy nie doliczając ich do sum — to szacunek z metadanych, a nie
+zafakturowane zużycie, i nie ma prawa zmieszać się z liczbami, które zgadzają się
+co do tokena.
+
+```
+$ AILimits --compactions
+ClaudeCode: 171 kompaktów, ~70 737 035 tokenów kontekstu przepuszczonego
+Codex: 23 kompaktów, ~3 816 955 tokenów kontekstu przepuszczonego
+```
+
 ## Budowanie
 
 ```bash
