@@ -111,8 +111,18 @@ final class AppModel: ObservableObject {
             weekOverWeek[app] = (try? stats.weekOverWeek(app: app, snapshot: snapshots[app],
                                                          tokensPerPercent: rates[app])) ?? nil
         }
-        threads = (try? stats.threadRows(since: earliestWindowStart(), limit: 12,
-                                         tokensPerPercent: rates)) ?? []
+        // Per app, from that app's own window start. Sharing one start date
+        // across both would let a thread's tokens fall outside the window its
+        // percentage is computed against, and the percentages would stop adding
+        // up to the window's own figure.
+        var rows: [StatsEngine.ThreadRow] = []
+        for app in AppKind.allCases {
+            let start = snapshots[app]?.window(minutes: 300)?.windowStart()
+                ?? Date().addingTimeInterval(-5 * 3_600)
+            rows += (try? stats.threadRows(since: start, app: app, limit: 8,
+                                           tokensPerPercent: rates)) ?? []
+        }
+        threads = rows
         let compacted = (try? store.compactions(since: earliestWindowStart())) ?? []
         compactions = Dictionary(grouping: compacted, by: \.app)
         if let models = try? store.distinctModels(), models.count != modelColors.count {
