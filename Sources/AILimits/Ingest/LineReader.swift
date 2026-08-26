@@ -76,4 +76,11 @@ enum Marker {
     static let compactBoundary = Array(#""compact_boundary""#.utf8)
     static let compacted  = Array(#""compacted""#.utf8)
     static let turnContext = Array(#""turn_context""#.utf8)
+
+    static let dshSessionHeader = Array(#""type":"session""#.utf8)
+    static let dshSessionTitle = Array(#""type":"session/title""#.utf8)
+    static let dshAssistantMessage = Array(#""type":"assistant/message""#.utf8)
+    static let dshRequestHeader = Array(#""type":"request/header""#.utf8)
+    static let dshCompactionStart = Array(#""type":"compaction/start""#.utf8)
+    static let dshCompactionEnd = Array(#""type":"compaction/end""#.utf8)
 }

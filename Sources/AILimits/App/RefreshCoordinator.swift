@@ -20,11 +20,11 @@ struct RefreshCoordinator {
     func run(fetchLimits: Bool = true) async -> Result {
         var result = Result()
 
-        do {
-            result.ingestedFiles = try ClaudeIngest(store: store).run()
-            result.ingestedFiles += try CodexIngest(store: store).run()
-        } catch {
-            result.errors[.claude] = "ingest: \(error)"
+        for (app, run) in [(AppKind.claude, { try ClaudeIngest(store: store).run() }),
+                          (.codex, { try CodexIngest(store: store).run() }),
+                          (.dsh, { try DshIngest(store: store).run() })] {
+            do { result.ingestedFiles += try run() }
+            catch { result.errors[app] = "ingest: \(error)" }
         }
 
         guard fetchLimits else { return result }

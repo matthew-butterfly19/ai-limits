@@ -36,6 +36,17 @@ final class AppModel: ObservableObject {
     }
     private static let titleModeKey = "menuBarMode"
 
+    /// Which apps get a segment in the menu bar line. Everything else about an
+    /// app — the popover section, the detail window — stays visible regardless;
+    /// this only thins out what competes for room next to the clock.
+    @Published var visibleApps: Set<AppKind> = Set(AppKind.allCases) {
+        didSet {
+            UserDefaults.standard.set(visibleApps.map(\.rawValue), forKey: Self.visibleAppsKey)
+            rebuildTitle()
+        }
+    }
+    private static let visibleAppsKey = "menuBarVisibleApps"
+
     /// The screen ticks far more often than the network does.
     ///
     /// Time-to-reset is recomputed locally from `resetsAt`, and pulling new log
@@ -62,6 +73,12 @@ final class AppModel: ObservableObject {
         }
         titleMode = UserDefaults.standard.string(forKey: Self.titleModeKey)
             .flatMap(TitleMode.init(rawValue:)) ?? .compact
+        // No saved preference yet (fresh install, or upgrading from a build
+        // before this existed) means "everything visible" — the checkbox
+        // starts as a no-op, not as an unexplained app disappearing.
+        if let saved = UserDefaults.standard.array(forKey: Self.visibleAppsKey) as? [String] {
+            visibleApps = Set(saved.compactMap(AppKind.init(rawValue:)))
+        }
         modelColors = ModelColors(models: (try? store?.distinctModels()) ?? [])
         loadCachedSnapshots()
         rebuildTitle()
@@ -113,7 +130,14 @@ final class AppModel: ObservableObject {
 
         var rates: [AppKind: Double] = [:]
         for app in AppKind.allCases {
-            windowTotals[app] = (try? stats.currentWindowTotals(snapshot: snapshots[app])) ?? nil
+            if app.hasLimitWindow {
+                windowTotals[app] = (try? stats.currentWindowTotals(snapshot: snapshots[app])) ?? nil
+            } else {
+                // No vendor window to anchor to (dsh) — a fixed rolling 5 h
+                // lookback stands in, so the popover and menu bar still have
+                // something to report "what did the last stretch cost".
+                windowTotals[app] = (try? store.totals(since: Date().addingTimeInterval(-5 * 3_600)))?[app]
+            }
             let windows = (try? stats.forecasts(app: app, snapshot: snapshots[app])) ?? []
             forecasts[app] = windows
             rates[app] = windows.first { $0.minutes == 300 }?.tokensPerPercent
@@ -163,6 +187,7 @@ final class AppModel: ObservableObject {
 
     private func rebuildTitle() {
         menuBarTitle = MenuBarTitle.render(snapshots: snapshots, totals: windowTotals,
-                                           forecasts: forecasts, mode: titleMode)
+                                           forecasts: forecasts, mode: titleMode,
+                                           visibleApps: visibleApps)
     }
 }

@@ -1,22 +1,38 @@
 import Foundation
 
-/// The two products whose usage this app tracks. Raw values are the `app`
-/// column already written by the Python collector — do not rename them.
+/// The products whose usage this app tracks. Raw values for `claude`/`codex`
+/// are the `app` column already written by the Python collector — do not
+/// rename them.
 enum AppKind: String, CaseIterable, Sendable, Codable {
     case claude
     case codex
+    /// DeepSeek Harness (`dsh`) — routes through OpenRouter, so there is no
+    /// vendor-side rate-limit window to poll. It never gets a `LimitsProvider`
+    /// and never appears in `RefreshCoordinator.providers`; its menu bar
+    /// segment is always token-based, never percent-based.
+    case dsh
 
     /// Name as it appears in the menu bar. The user rejected abbreviations.
     var display: String {
         switch self {
         case .claude: return "ClaudeCode"
         case .codex:  return "Codex"
+        case .dsh:    return "Harness"
+        }
+    }
+
+    /// Whether this app has a vendor-reported rate-limit window at all.
+    var hasLimitWindow: Bool {
+        switch self {
+        case .claude, .codex: return true
+        case .dsh: return false
         }
     }
 }
 
 /// One billed API response. `uniq` is the app-specific dedup key:
-/// Claude `<message.id>:<requestId>`, Codex `<session_id>:<ordinal>`.
+/// Claude `<message.id>:<requestId>`, Codex `<session_id>:<ordinal>`,
+/// dsh `<session_id>:<seq>` — dsh's own log already numbers every event.
 struct UsageEvent: Sendable {
     var app: AppKind
     var uniq: String

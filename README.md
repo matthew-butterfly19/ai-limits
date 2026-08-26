@@ -1,7 +1,8 @@
 # AI Limits
 
 Widget paska menu macOS, który odpowiada na jedno pytanie: **czy limit wystarczy mi do
-resetu** — dla Claude Code i Codeksa naraz.
+resetu** — dla Claude Code i Codeksa naraz, plus zużycie tokenów DeepSeek Harness (dsh),
+który rozlicza się inaczej i nie ma własnego okna limitu.
 
 ![Pasek menu](docs/menubar.png)
 
@@ -19,6 +20,10 @@ wcześniej.
 
 Przycisk *Szczegóły…* otwiera okno z wykresami: tokeny w godzinach, tydzień do tygodnia,
 przebieg wykorzystania limitów, tabela modeli i rozwijana lista wątków.
+
+Ikona zębatki obok niego chowa dwa ustawienia: co ma prowadzić w pasku menu (okna, tokeny
+albo oba) i które aplikacje w ogóle dostają tam segment — przydatne, gdy jedna z nich milczy
+tygodniami i tylko zajmuje miejsce.
 
 ## Instalacja
 
@@ -41,6 +46,7 @@ Wymaga macOS 14+ i Command Line Tools. Xcode nie jest potrzebny.
 | `codex app-server` → `account/rateLimits/read` | limity Codeksa — okno 5 h i tygodniowe |
 | `~/.claude/projects/**/*.jsonl` | tokeny per wątek, model, projekt, subagenci |
 | `~/.codex/sessions/**/*.jsonl` | jw. plus historyczne próbki limitów z samych logów |
+| `~/.dsh/sessions/**/session.jsonl.zstd` | tokeny per wątek i model dla dsh — bez limitu, bo dsh rozlicza się przez OpenRouter, nie przez subskrypcję z oknem |
 
 Token OAuth czytamy z Keychaina przy każdym odczycie i nigdzie go nie zapisujemy.
 Wszystko inne zostaje na dysku, w SQLite pod `~/Library/Application Support/AILimits/`.
@@ -64,6 +70,11 @@ w przebraniu pomiaru.
 
 ## Czego te liczby nie mówią
 
+**dsh nie ma prognozy ani werdyktu, tylko tokeny.** OpenRouter rozlicza per token, nie przez
+subskrypcję z resetem, więc nie ma tu żadnego okna do wypełnienia — sekcja Harness w panelu
+liczy wyłącznie zużycie, a w pasku menu pokazuje tokeny zawsze, niezależnie od trybu, bo to
+jedyne, co ma do powiedzenia.
+
 **Procent per sesja to udział w tokenach, nie zmierzony koszt.** Suma po sesjach zgadza się
 z licznikiem okna co do procenta, ale podział między nie zakłada, że token kosztuje tyle
 samo niezależnie od modelu. Dostawcy nie podają wag per model; żeby je oszacować, potrzeba
@@ -77,7 +88,8 @@ trafiają więc do osobnej tabeli i są pokazywane obok sum, nigdy w nich (`--co
 **Sumy są niższe niż `/stats` w Claude Code.** Claude zapisuje jedną odpowiedź modelu
 w kilku liniach JSONL, powtarzając w każdej ten sam licznik zużycia. Deduplikujemy po
 `(message.id, requestId)`; `/stats` liczy każdą linię osobno. Dla Codeksa kluczem jest
-`(session_id, ordinal)`.
+`(session_id, ordinal)`, dla dsh — `(session_id, seq)`, bo jego własny log już numeruje
+każde zdarzenie.
 
 ## Z terminala
 
@@ -114,6 +126,11 @@ wymaga `sudo`:
   `SwiftBridging`. Wtedy *każda* kompilacja Swifta pada na „redefinition of module" — nawet
   gołe `import Foundation`. Skrypt wykrywa to i przykrywa przestarzały plik nakładką VFS na
   czas kompilacji.
+
+macOS nie ma systemowego zstd — sesje dsh są nim skompresowane, więc odczyt ładuje
+Homebrew'owe `libzstd.dylib` przez `dlopen` w czasie działania (nie w czasie budowania,
+więc `./scripts/build.sh` tego nie wymaga). Bez `brew install zstd` ingestia dsh po cichu
+się pomija — reszta aplikacji działa normalnie.
 
 ## Licencja
 

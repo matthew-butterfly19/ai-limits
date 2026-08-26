@@ -98,7 +98,7 @@ struct DetailWindow: View {
                     .opacity(dimmed(bucket.hourStart, hover: hourHover, unit: .hour) ? 0.35 : 1)
                 }
             }
-            .chartForegroundStyleScale(appScale)
+            .chartForegroundStyleScale(domain: appScaleDomain, range: appScaleRange)
             .chartOverlayHover($hourHover)
             .chartTooltip(at: hourHover) { hourTooltip }
             .chartYAxis { AxisMarks { value in
@@ -139,7 +139,7 @@ struct DetailWindow: View {
                     }
                 }
             }
-            .chartForegroundStyleScale(appScale)
+            .chartForegroundStyleScale(domain: appScaleDomain, range: appScaleRange)
             .chartOverlayHover($weekHover)
             .chartTooltip(at: weekHover) { weekTooltip }
             .chartXAxis { AxisMarks(values: .stride(by: .day)) { value in
@@ -179,7 +179,7 @@ struct DetailWindow: View {
                     }
                 }
             }
-            .chartForegroundStyleScale(appScale)
+            .chartForegroundStyleScale(domain: appScaleDomain, range: appScaleRange)
             .chartOverlayHover($limitHover)
             .chartTooltip(at: limitHover) { limitTooltip }
             .chartYScale(domain: 0...100)
@@ -277,10 +277,8 @@ struct DetailWindow: View {
         }
     }
 
-    private var appScale: KeyValuePairs<String, Color> {
-        [AppKind.claude.display: Palette.color(for: .claude),
-         AppKind.codex.display: Palette.color(for: .codex)]
-    }
+    private var appScaleDomain: [String] { AppKind.allCases.map(\.display) }
+    private var appScaleRange: [Color] { AppKind.allCases.map(Palette.color(for:)) }
 
     /// One line per (app, window). A gap longer than 30 minutes breaks the line
     /// instead of interpolating across a period when nothing was sampled.

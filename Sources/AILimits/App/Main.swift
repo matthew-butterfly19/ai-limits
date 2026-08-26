@@ -66,7 +66,7 @@ enum CommandLineTool {
 
     private static func usage() {
         print("""
-        AILimits — kolektor statystyk Claude Code i Codeksa
+        AILimits — kolektor statystyk Claude Code, Codeksa i DeepSeek Harness
 
           --ingest  [--db PATH]              wczytaj nowe linie logów
           --totals  [--db PATH] [--since ISO] sumy tokenów per aplikacja
@@ -80,15 +80,18 @@ enum CommandLineTool {
     }
 
     private static func ingest(_ store: Store) throws {
-        let started = Date()
-        let claudeFiles = try ClaudeIngest(store: store).run()
-        let claudeDone = Date()
-        let codexFiles = try CodexIngest(store: store).run()
-        let finished = Date()
-        print(String(format: "claude: %d plików w %.1fs", claudeFiles,
-                     claudeDone.timeIntervalSince(started)))
-        print(String(format: "codex:  %d plików w %.1fs", codexFiles,
-                     finished.timeIntervalSince(claudeDone)))
+        var previous = Date()
+        for (label, run) in [("claude", { try ClaudeIngest(store: store).run() }),
+                             ("codex ", { try CodexIngest(store: store).run() }),
+                             ("dsh   ", { try DshIngest(store: store).run() })] {
+            let files = try run()
+            let now = Date()
+            print(String(format: "%@: %d plików w %.1fs", label, files, now.timeIntervalSince(previous)))
+            previous = now
+        }
+        if !Zstd.isAvailable {
+            print("dsh: libzstd nie znaleziony — pomijam (brew install zstd)")
+        }
     }
 
     private static func parseSince(_ text: String?) -> Date? {

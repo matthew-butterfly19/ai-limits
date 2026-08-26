@@ -18,8 +18,8 @@ enum TitleMode: String, CaseIterable, Identifiable {
         switch self {
         case .compact:  return "Zwięźle"
         case .forecast: return "Wszystkie okna"
-        case .tokens:   return "Tokeny"
-        case .both:     return "Wszystko"
+        case .tokens:   return "Tylko tokeny"
+        case .both:     return "Okna + tokeny"
         }
     }
 
@@ -42,8 +42,9 @@ enum MenuBarTitle {
                        totals: [AppKind: TokenTotals],
                        forecasts: [AppKind: [Forecast]] = [:],
                        mode: TitleMode = .compact,
+                       visibleApps: Set<AppKind> = Set(AppKind.allCases),
                        now: Date = Date()) -> String {
-        let segments = AppKind.allCases.compactMap { app -> String? in
+        let segments = AppKind.allCases.filter(visibleApps.contains).compactMap { app -> String? in
             segment(app: app, snapshot: snapshots[app], totals: totals[app],
                     forecasts: forecasts[app] ?? [], mode: mode, now: now)
         }
@@ -57,7 +58,12 @@ enum MenuBarTitle {
                                 mode: TitleMode,
                                 now: Date) -> String? {
         var parts: [String] = []
-        if mode.showsTokens, let totals, totals.total > 0 {
+        // An app with no vendor rate-limit window (dsh) has no percentage to
+        // lead with at all — tokens are the only thing it can ever report, so
+        // they show regardless of mode. Otherwise a windowless app's checkbox
+        // would visibly do nothing outside `.tokens`/`.both`.
+        let showTokens = mode.showsTokens || !app.hasLimitWindow
+        if showTokens, let totals, totals.total > 0 {
             parts.append("\(Format.tokens(totals.total))/\(Format.tokens(totals.billable))")
         }
 

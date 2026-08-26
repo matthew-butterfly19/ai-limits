@@ -44,6 +44,11 @@ struct PopoverView: View {
                     ForEach(TitleMode.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.inline)
+                Divider()
+                Text("Widoczne w pasku menu")
+                ForEach(AppKind.allCases, id: \.self) { app in
+                    Toggle(app.display, isOn: visibleBinding(for: app))
+                }
             } label: {
                 Image(systemName: "gearshape")
             }
@@ -69,6 +74,15 @@ struct PopoverView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    private func visibleBinding(for app: AppKind) -> Binding<Bool> {
+        Binding(
+            get: { model.visibleApps.contains(app) },
+            set: { isOn in
+                if isOn { model.visibleApps.insert(app) }
+                else { model.visibleApps.remove(app) }
+            })
     }
 }
 

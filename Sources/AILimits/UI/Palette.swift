@@ -27,9 +27,12 @@ enum Palette {
 
     static let other = adaptive(light: "#898781", dark: "#898781")
 
-    /// Each app owns the categorical slot it is introduced with.
+    /// Each app owns the categorical slot it is introduced with, in
+    /// declaration order — the same fully-validated 8-slot set the model
+    /// palette draws from, just claimed from the front instead of sorted.
     static func color(for app: AppKind) -> Color {
-        categorical[app == .claude ? 0 : 1]
+        let index = AppKind.allCases.firstIndex(of: app) ?? 0
+        return categorical[index % categorical.count]
     }
 
     /// Status steps are fixed — never themed, never reused for a series. They
