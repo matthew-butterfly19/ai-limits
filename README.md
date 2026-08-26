@@ -1,15 +1,17 @@
 # ai-limits
 
-Widget do paska menu macOS (SwiftBar), który pokazuje **wykorzystanie limitów i zużycie
-tokenów** w Claude Code i Codeksie — razem, w jednym miejscu.
+Aplikacja paska menu macOS, która pokazuje **wykorzystanie limitów i zużycie tokenów**
+w Claude Code i Codeksie — razem, w jednym miejscu.
 
 ```
-ClaudeCode 60M · 14%→4h30m · 65%→3d7h ┃ Codex 19M · 28%→4h29m · 23%→6d6h
+ClaudeCode 175M/2.5M · 42%→2h21m · 68%→3d4h  ┃  Codex 107M/2.1M · 60%→2h20m · 28%→6d4h
 ```
 
-Liczba tokenów to zużycie od północy, potem kolejno okna limitów: procent i czas do resetu.
-Kliknięcie rozwija szczegóły (rozbicie na wejście/wyjście/cache, wątki dnia), a pozycja
-„Pełny dashboard" generuje stronę HTML z wykresami 24 h i tabelą wątków.
+Dwie liczby to tokeny w bieżącym oknie 5 h: łącznie i bez odczytów z cache (te potrafią być
+97 % surowego wolumenu i nie przekładają się wprost na zużycie limitu). Dalej kolejne okna
+limitów: procent i czas do resetu. Kliknięcie otwiera panel z licznikami, rozbiciem na
+modele i najcięższymi wątkami; „Szczegóły…" — okno z wykresami, udziałem projektów
+i rozwijaną tabelą wątek × model.
 
 ## Skąd biorą się dane
 
@@ -35,19 +37,49 @@ Deduplikujemy po `(message.id, requestId)`, więc wynik jest niższy niż to, co
 Klucz jest `PRIMARY KEY`, a zapis idzie przez `INSERT OR IGNORE` — ponowne wczytanie
 dowolnego pliku niczego nie podwaja.
 
-## Instalacja
+## Budowanie
 
-1. `brew install --cask swiftbar`
-2. Katalog wtyczek ustaw na `~/Library/Application Support/SwiftBar/Plugins`
-3. Skopiuj tam `plugin/ailimits.2m.py` (interwał odświeżania siedzi w nazwie pliku)
-4. Repo trzymaj w `~/Projects/ai-limits` albo popraw ścieżkę w pierwszej linii wtyczki
+```bash
+./scripts/build.sh            # debug → .build/AILimits.app
+./scripts/build.sh release
+open .build/AILimits.app
+```
 
-Wymaga tylko systemowego Pythona 3.9 z macOS — zero zależności.
+Wymaga Command Line Tools (Swift 6.1+). Xcode nie jest potrzebny.
+
+**Dlaczego nie ma `Package.swift`.** Na czystych Command Line Tools dostarczona
+`libPackageDescription.dylib` nie eksportuje inicjalizatora `Package`, do którego linkuje
+SwiftPM, więc każdy manifest wywala się na etapie linkowania. Sam `swiftc` działa
+bez zarzutu, więc `.app` składa skrypt.
+
+**Duplikat mapy modułów.** Niektóre instalacje CLT niosą dwie kopie mapy modułu
+`SwiftBridging` (`bridging.modulemap` i przestarzały `module.modulemap`, identyczne poza
+rokiem w nagłówku). Wtedy *każda* kompilacja Swifta pada na „redefinition of module
+'SwiftBridging'" — nawet gołe `import Foundation`. Skrypt budujący wykrywa to i przykrywa
+przestarzały plik nakładką VFS na czas kompilacji. Nie wymaga `sudo` i nie zmienia niczego
+w systemie.
 
 ## Użycie z terminala
 
+Ta sama binarka działa jako narzędzie CLI:
+
 ```bash
-python3 -m ailimits.cli menu        # to, co widzi SwiftBar
-python3 -m ailimits.cli ingest      # samo wczytanie nowych logów
-python3 -m ailimits.cli dashboard   # generuje HTML i wypisuje ścieżkę
+.build/AILimits.app/Contents/MacOS/AILimits --ingest    # wczytaj nowe linie logów
+.build/AILimits.app/Contents/MacOS/AILimits --totals    # sumy tokenów per aplikacja
+.build/AILimits.app/Contents/MacOS/AILimits --threads   # najcięższe wątki
+.build/AILimits.app/Contents/MacOS/AILimits --limits    # limity na żywo
+```
+
+`--db PATH` wskazuje inną bazę — tak sprawdzamy zgodność kolektora bez ruszania tej właściwej.
+
+## Prototyp w Pythonie
+
+Katalog `ailimits/` i `plugin/ailimits.2m.py` to działający prototyp na SwiftBarze, z którego
+wyrosła ta aplikacja. Zostaje w repo do czasu, aż natywna wersja przejmie wszystko —
+i jako niezależny punkt odniesienia dla liczb.
+
+```bash
+python3 -m ailimits.cli menu
+python3 -m ailimits.cli ingest
+python3 -m ailimits.cli dashboard
 ```

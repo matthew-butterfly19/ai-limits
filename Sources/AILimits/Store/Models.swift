@@ -2,7 +2,7 @@ import Foundation
 
 /// The two products whose usage this app tracks. Raw values are the `app`
 /// column already written by the Python collector — do not rename them.
-enum AppKind: String, CaseIterable, Sendable {
+enum AppKind: String, CaseIterable, Sendable, Codable {
     case claude
     case codex
 
@@ -65,18 +65,22 @@ struct LimitSample: Sendable {
 }
 
 /// Everything one provider knows right now.
-struct LimitsSnapshot: Sendable {
+struct LimitsSnapshot: Sendable, Codable {
     var app: AppKind
     var takenAt: Date
     var windows: [LimitWindow]
     var planName: String?
+    /// Windows the vendor meters per model, shown alongside the main ones.
+    var scoped: [ScopedLimit] = []
     /// Set when the snapshot came from cache because the live fetch failed.
     var staleReason: String?
 
     var isStale: Bool { staleReason != nil }
+
+    func window(minutes: Int) -> LimitWindow? { windows.first { $0.minutes == minutes } }
 }
 
-struct LimitWindow: Sendable, Identifiable {
+struct LimitWindow: Sendable, Identifiable, Codable {
     var minutes: Int
     var pct: Double
     var resetsAt: Date?

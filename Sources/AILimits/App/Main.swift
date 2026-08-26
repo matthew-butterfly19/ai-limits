@@ -114,6 +114,31 @@ enum CommandLineTool {
     }
 
     private static func limits(_ store: Store) throws {
-        print("(--limits jeszcze nie zaimplementowane w Swifcie)")
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            let result = await RefreshCoordinator(store: store).run()
+            for app in AppKind.allCases {
+                if let snapshot = result.snapshots[app] {
+                    let plan = snapshot.planName.map { " (\($0))" } ?? ""
+                    let stale = snapshot.isStale ? "  ⚠ \(snapshot.staleReason ?? "")" : ""
+                    print("\(app.display)\(plan)\(stale)")
+                    for window in snapshot.windows {
+                        print("  \(Format.windowName(window.minutes))  "
+                              + "\(Format.percent(window.pct))  →  "
+                              + "\(Format.timeLeft(window.timeLeft()))")
+                    }
+                    for scoped in snapshot.scoped {
+                        print("  \(Format.windowName(scoped.window.minutes)) \(scoped.label)  "
+                              + "\(Format.percent(scoped.window.pct))")
+                    }
+                }
+                if let error = result.errors[app] { print("\(app.display): \(error)") }
+            }
+            print("")
+            print(MenuBarTitle.render(snapshots: result.snapshots,
+                                      totals: (try? store.totals(since: Date().addingTimeInterval(-5 * 3600))) ?? [:]))
+            semaphore.signal()
+        }
+        semaphore.wait()
     }
 }
