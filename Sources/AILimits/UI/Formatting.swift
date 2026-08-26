@@ -17,11 +17,11 @@ enum Format {
     static func tokens(_ count: Int) -> String {
         let value = max(count, 0)
         if value >= 1_000_000_000 {
-            return String(format: "%.1fB", Double(value) / 1_000_000_000)
+            return decimal(Double(value) / 1_000_000_000) + "B"
         }
-        if value >= 10_000_000 { return String(format: "%.0fM", Double(value) / 1_000_000) }
-        if value >= 1_000_000  { return String(format: "%.1fM", Double(value) / 1_000_000) }
-        if value >= 1_000      { return String(format: "%.0fk", Double(value) / 1_000) }
+        if value >= 10_000_000 { return "\(Int((Double(value) / 1_000_000).rounded()))M" }
+        if value >= 1_000_000  { return decimal(Double(value) / 1_000_000) + "M" }
+        if value >= 1_000      { return "\(Int((Double(value) / 1_000).rounded()))k" }
         return String(value)
     }
 
@@ -44,6 +44,15 @@ enum Format {
         if days > 0  { return "\(days)d\(hours)h" }
         if hours > 0 { return String(format: "%dh%02dm", hours, minutes) }
         return "\(minutes)m"
+    }
+
+    /// One decimal place, with the separator this locale actually uses.
+    static func decimal(_ value: Double, places: Int = 1) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "pl_PL")
+        formatter.minimumFractionDigits = places
+        formatter.maximumFractionDigits = places
+        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.1f", value)
     }
 
     static func percent(_ value: Double?) -> String {
@@ -72,6 +81,9 @@ enum Format {
         }
         return name
     }
+
+    /// Exposed for SwiftUI's `Text(_:formatter:)`.
+    static var clockFormatter: DateFormatter { clock }
 
     private static let clock: DateFormatter = {
         let formatter = DateFormatter()

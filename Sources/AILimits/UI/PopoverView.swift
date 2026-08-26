@@ -1,5 +1,10 @@
 import SwiftUI
 
+/// The panel behind the menu bar item.
+///
+/// Deliberately short. An earlier version stacked six type sizes down to 8 pt
+/// and nobody could scan it; everything that is reference material rather than
+/// a decision now lives in the detail window. Nothing here is below 11 pt.
 struct PopoverView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.openWindow) private var openWindow
@@ -8,237 +13,251 @@ struct PopoverView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let fatal = model.fatalError {
                 Label(fatal, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
+                    .font(.system(size: 12))
                     .foregroundStyle(Palette.critical)
-                    .padding(14)
+                    .padding(16)
             }
 
             ForEach(Array(AppKind.allCases.enumerated()), id: \.element) { index, app in
-                if index > 0 { Divider().padding(.vertical, 2) }
+                if index > 0 { Divider() }
                 AppSection(app: app)
             }
 
             Divider()
             footer
         }
-        .frame(width: 420)
-        .environmentObject(model)
+        .frame(width: 460)
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             if model.isRefreshing {
-                ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 12, height: 12)
+                ProgressView().controlSize(.small).scaleEffect(0.6).frame(width: 12, height: 12)
             }
-            Text(model.lastRefresh.map { "odświeżono \(Format.when($0))" } ?? "—")
-                .font(.system(size: 10))
+            Text(model.lastRefresh.map { "odświeżono \($0, formatter: Format.clockFormatter)" } ?? "—")
+                .font(.system(size: 11))
                 .foregroundStyle(Palette.muted)
             Spacer()
+            Menu {
+                Picker("W pasku menu", selection: $model.titleMode) {
+                    ForEach(TitleMode.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Image(systemName: "gearshape")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 24)
+            .help("Co pokazywać w pasku menu")
+
             Button("Szczegóły…") { openWindow(id: DetailWindow.identifier) }
-                .buttonStyle(.borderless)
-                .font(.system(size: 11))
+                .font(.system(size: 12))
             Button {
                 Task { await model.refresh() }
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
-            .buttonStyle(.borderless)
             .help("Odśwież teraz")
             Button {
                 NSApplication.shared.terminate(nil)
             } label: {
                 Image(systemName: "power")
             }
-            .buttonStyle(.borderless)
             .help("Zakończ AI Limits")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 }
 
-/// One app's block: headline numbers, limit meters, model split, top threads.
+/// One app: limits with a verdict, then what ate them.
 struct AppSection: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.openWindow) private var openWindow
     let app: AppKind
 
     private var snapshot: LimitsSnapshot? { model.snapshots[app] }
-    private var totals: TokenTotals? { model.windowTotals[app] }
-    private var threads: [StatsEngine.ThreadRow] { model.threads.filter { $0.thread.app == app } }
+    private var threads: [StatsEngine.ThreadRow] {
+        model.threads.filter { $0.thread.app == app && $0.thread.totals.total > 0 }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 14) {
             header
             if let error = model.errors[app] {
                 Label(error, systemImage: "exclamationmark.circle")
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(Palette.serious)
             }
-            meters
-            compactionNote
-            if !threads.isEmpty {
-                sectionLabel("Wątki w tym oknie")
-                ForEach(threads.prefix(5)) { row in
-                    BarRow(title: row.thread.displayTitle,
-                           subtitle: subtitle(for: row),
-                           value: row.thread.totals.total,
-                           fraction: row.share,
-                           color: Palette.color(for: app))
-                }
-            }
-            if let models = modelSegments(), !models.isEmpty {
-                sectionLabel("Modele")
-                StackedBar(segments: models)
-                FlowLegend(segments: models)
-            }
+            windows
+            if !threads.isEmpty { threadList }
+            weekLine
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
-            Circle().fill(Palette.color(for: app)).frame(width: 8, height: 8)
-            Text(app.display).font(.system(size: 13, weight: .semibold))
+        HStack(spacing: 8) {
+            Circle().fill(Palette.color(for: app)).frame(width: 9, height: 9)
+            Text(app.display).font(.system(size: 14, weight: .semibold))
             if let plan = snapshot?.planName { Chip(text: plan) }
             Spacer()
-            if let totals {
-                (Text(Format.tokens(totals.total)).font(.system(size: 15, weight: .semibold))
-                 + Text(" / ").foregroundColor(Palette.muted)
-                 + Text(Format.tokens(totals.billable)).font(.system(size: 13)))
-                    .monospacedDigit()
-                    .help("""
-                          \(Format.tokensFull(totals.total)) tokenów łącznie
-                          \(Format.tokensFull(totals.billable)) bez odczytów z cache
-                          """)
+            if snapshot?.isStale == true {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.warning)
+                    .help(snapshot?.staleReason ?? "dane z cache")
             }
         }
     }
 
-    @ViewBuilder private var meters: some View {
-        let windows = (snapshot?.windows ?? []).sorted { $0.minutes < $1.minutes }
-        if windows.isEmpty {
-            Text("brak danych o limitach").font(.system(size: 10)).foregroundStyle(Palette.muted)
+    @ViewBuilder private var windows: some View {
+        let sorted = (snapshot?.windows ?? []).sorted { $0.minutes < $1.minutes }
+        if sorted.isEmpty {
+            Text("brak danych o limitach").font(.system(size: 12)).foregroundStyle(Palette.muted)
         } else {
-            ForEach(windows) { window in
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(Format.windowName(window.minutes))
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Palette.muted)
-                            .frame(width: 22, alignment: .leading)
-                        MeterBar(percent: window.pct)
-                        Text(Format.percent(window.pct))
-                            .font(.system(size: 11, weight: .medium)).monospacedDigit()
-                            .frame(width: 34, alignment: .trailing)
-                        Text("→ \(Format.timeLeft(window.timeLeft()))")
-                            .font(.system(size: 10)).monospacedDigit()
-                            .foregroundStyle(Palette.muted)
-                            .frame(width: 56, alignment: .trailing)
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(sorted) { window in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 10) {
+                            Text(Format.windowName(window.minutes))
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Palette.muted)
+                                .frame(width: 26, alignment: .leading)
+                            Text(Format.percent(window.pct))
+                                .font(.system(size: 17, weight: .semibold))
+                                .monospacedDigit()
+                                .frame(width: 52, alignment: .trailing)
+                            MeterBar(percent: window.pct, height: 10)
+                            Text(Format.timeLeft(window.timeLeft()))
+                                .font(.system(size: 12))
+                                .monospacedDigit()
+                                .foregroundStyle(Palette.muted)
+                                .frame(width: 58, alignment: .trailing)
+                        }
+                        if let forecast = model.forecasts[app]?.first(where: { $0.minutes == window.minutes }) {
+                            ForecastLine(forecast: forecast).padding(.leading, 36)
+                        }
                     }
-                    if window.minutes == 300, let burn = model.burnRates[app] {
-                        Text(burnText(burn))
-                            .font(.system(size: 9))
-                            .foregroundStyle(Palette.muted)
-                            .padding(.leading, 28)
-                    }
-                }
-            }
-            ForEach(snapshot?.scoped ?? []) { scoped in
-                HStack(spacing: 6) {
-                    Text(scoped.label)
-                        .font(.system(size: 10)).foregroundStyle(Palette.muted)
-                        .frame(width: 90, alignment: .leading).lineLimit(1)
-                    MeterBar(percent: scoped.window.pct, height: 5)
-                    Text(Format.percent(scoped.window.pct))
-                        .font(.system(size: 10)).monospacedDigit()
-                        .frame(width: 34, alignment: .trailing)
                 }
             }
         }
     }
 
-    /// Neither vendor bills the compaction call through the usage stream, so
-    /// this is stated as what it is — context the limit saw and the counters
-    /// above did not.
-    @ViewBuilder private var compactionNote: some View {
-        let rows = model.compactions[app] ?? []
-        if !rows.isEmpty {
-            let context = rows.reduce(0) { $0 + $1.preTokens }
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.down.right.and.arrow.up.left")
-                    .font(.system(size: 8)).foregroundStyle(Palette.muted)
-                Text("\(rows.count) × kompakt kontekstu · ~\(Format.tokens(context)) "
-                     + "przeczytane przy kompaktowaniu, poza licznikami powyżej")
-                    .font(.system(size: 9))
+    /// The thread list is denominated in percent of the limit, not tokens:
+    /// percent is what the user is actually spending.
+    private var threadList: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text("Na co poszło to okno")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Palette.muted)
+                Spacer()
+                if let totals = model.windowTotals[app], totals.total > 0 {
+                    Text(Format.tokens(totals.total))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundStyle(Palette.muted)
+                        .help("\(Format.tokensFull(totals.total)) tokenów łącznie, "
+                              + "\(Format.tokensFull(totals.billable)) bez odczytów z cache")
+                }
+            }
+            ForEach(threads.prefix(4)) { row in
+                ThreadLine(row: row, color: Palette.color(for: app))
+            }
+            if threads.count > 4 {
+                Button("jeszcze \(threads.count - 4) — pokaż wszystkie") {
+                    openWindow(id: DetailWindow.identifier)
+                }
+                .buttonStyle(.link)
+                .font(.system(size: 11))
+            }
+        }
+    }
+
+    @ViewBuilder private var weekLine: some View {
+        if let week = model.weekOverWeek[app], let change = week.change {
+            HStack(spacing: 6) {
+                Image(systemName: change >= 0 ? "arrow.up.right" : "arrow.down.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(change >= 0 ? Palette.serious : Palette.good)
+                Text("\(change >= 0 ? "+" : "")\(Int((change * 100).rounded()))% wobec tego samego "
+                     + "momentu tydzień temu")
+                    .font(.system(size: 12))
+                Spacer()
+                Text("\(Format.tokens(week.current)) / \(Format.tokens(week.previous))")
+                    .font(.system(size: 11))
+                    .monospacedDigit()
                     .foregroundStyle(Palette.muted)
             }
-            .help("""
-                  Ani Claude Code, ani Codex nie zapisują zużycia samego wywołania
-                  kompaktującego: Claude zostawia rekord compact_boundary bez bloku
-                  usage, Codex – token_count z zerami. Limit to jednak odczuł.
-                  """)
+            .help(weekTooltip(week))
         }
     }
 
-    private func burnText(_ burn: StatsEngine.BurnRate) -> String {
-        let rate = String(format: "%.1f", burn.percentPerHour)
-        guard let exhausted = burn.exhaustedAt else { return "≈ \(rate) %/h" }
-        return "≈ \(rate) %/h · wyczerpanie ok. \(Format.when(exhausted))"
-    }
-
-    private func subtitle(for row: StatsEngine.ThreadRow) -> String? {
-        var parts: [String] = []
-        if let project = row.thread.project { parts.append(project) }
-        if let top = row.models.first?.model { parts.append(Format.model(top)) }
-        if row.thread.subagentTokens > 0 {
-            parts.append("subagenci \(Format.tokens(row.thread.subagentTokens))")
+    private func weekTooltip(_ week: StatsEngine.WeekOverWeek) -> String {
+        var lines = ["Od otwarcia okna tygodniowego minęło "
+                     + "\(Format.timeLeft(week.elapsed)) — porównanie obejmuje "
+                     + "dokładnie tyle samo czasu tydzień wcześniej.",
+                     "Teraz \(Format.tokensFull(week.current)), "
+                     + "tydzień temu \(Format.tokensFull(week.previous))."]
+        if let percent = week.previousPercent {
+            lines.append("Tamten tydzień to byłoby ≈\(Int(percent.rounded()))% limitu przy "
+                         + "dzisiejszym przeliczniku tokenów na procent — szacunek, bo próbek "
+                         + "limitu sprzed tygodnia jeszcze nie ma.")
         }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    private func modelSegments() -> [StackedBar.Segment]? {
-        let rows = model.threads.filter { $0.thread.app == app }.flatMap(\.models)
-        guard !rows.isEmpty else { return nil }
-        var byModel: [String: Int] = [:]
-        for row in rows { byModel[row.model ?? "—", default: 0] += row.totals.total }
-        return byModel
-            .sorted { $0.value > $1.value }
-            .prefix(6)
-            .map { StackedBar.Segment(id: $0.key, value: $0.value,
-                                      color: model.modelColors.color(for: $0.key),
-                                      label: Format.model($0.key)) }
-    }
-
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text.uppercased())
-            .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(Palette.muted)
-            .padding(.top, 2)
+        return lines.joined(separator: "\n")
     }
 }
 
-/// Legend for a stacked bar. Always present, so identity never rests on colour.
-struct FlowLegend: View {
-    var segments: [StackedBar.Segment]
-
-    private var total: Int { max(segments.reduce(0) { $0 + $1.value }, 1) }
+/// One thread, priced in percent of the limit window.
+struct ThreadLine: View {
+    var row: StatsEngine.ThreadRow
+    var color: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(segments) { segment in
-                HStack(spacing: 5) {
-                    RoundedRectangle(cornerRadius: 2).fill(segment.color).frame(width: 8, height: 8)
-                    Text(segment.label).font(.system(size: 10)).lineLimit(1)
-                    Spacer(minLength: 4)
-                    Text(Format.tokens(segment.value))
-                        .font(.system(size: 10)).monospacedDigit().foregroundStyle(.secondary)
-                    Text("\(Int((Double(segment.value) / Double(total) * 100).rounded()))%")
-                        .font(.system(size: 10)).monospacedDigit()
-                        .foregroundStyle(Palette.muted)
-                        .frame(width: 30, alignment: .trailing)
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.thread.displayTitle)
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                GeometryReader { geometry in
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(color)
+                        .frame(width: max(2, geometry.size.width * CGFloat(min(max(row.share, 0), 1))))
                 }
+                .frame(height: 3)
             }
+            if let percent = row.limitPercent {
+                Text(percent >= 1 ? "\(Int(percent.rounded()))%"
+                                  : "\(Format.decimal(percent))%")
+                    .font(.system(size: 13, weight: .semibold))
+                    .monospacedDigit()
+                    .frame(width: 46, alignment: .trailing)
+            }
+            Text(Format.tokens(row.thread.totals.total))
+                .font(.system(size: 11))
+                .monospacedDigit()
+                .foregroundStyle(Palette.muted)
+                .frame(width: 48, alignment: .trailing)
         }
+        .help(tooltip)
+    }
+
+    private var tooltip: String {
+        var lines = [row.thread.displayTitle]
+        if let project = row.thread.project { lines.append("projekt: \(project)") }
+        if let percent = row.limitPercent {
+            lines.append("≈\(Format.decimal(percent)) % okna 5 h")
+        }
+        lines.append("\(Format.tokensFull(row.thread.totals.total)) tokenów, "
+                     + "\(row.thread.totals.events) tur")
+        if let top = row.models.first?.model { lines.append("głównie \(Format.model(top))") }
+        if row.thread.subagentTokens > 0 {
+            lines.append("w tym subagenci: \(Format.tokens(row.thread.subagentTokens))")
+        }
+        return lines.joined(separator: "\n")
     }
 }

@@ -56,9 +56,15 @@ struct StatsEngine {
         var id: String { thread.id }
         /// Share of the app's total in the same window, 0…1.
         var share: Double = 0
+        /// Percent of the limit window this thread ate. This is the number the
+        /// user actually pays in — tokens are only the unit it is measured in.
+        var limitPercent: Double?
     }
 
-    func threadRows(since: Date?, app: AppKind? = nil, limit: Int = 12) throws -> [ThreadRow] {
+    /// `tokensPerPercent` converts each thread's tokens into the currency that
+    /// matters on a subscription: percent of the window it consumed.
+    func threadRows(since: Date?, app: AppKind? = nil, limit: Int = 12,
+                    tokensPerPercent: [AppKind: Double] = [:]) throws -> [ThreadRow] {
         let threads = try store.threads(since: since, app: app, limit: limit)
         let matrix = try store.threadModelMatrix(since: since, app: app)
         var byThread: [String: [ThreadModelUsage]] = [:]
@@ -67,10 +73,12 @@ struct StatsEngine {
         let totalsByApp = try store.totals(since: since)
         return threads.map { thread in
             let appTotal = totalsByApp[thread.app]?.total ?? 0
+            let perPercent = tokensPerPercent[thread.app]
             return ThreadRow(
                 thread: thread,
                 models: (byThread[thread.id] ?? []).sorted { $0.totals.total > $1.totals.total },
-                share: appTotal > 0 ? Double(thread.totals.total) / Double(appTotal) : 0)
+                share: appTotal > 0 ? Double(thread.totals.total) / Double(appTotal) : 0,
+                limitPercent: perPercent.map { Double(thread.totals.total) / $0 })
         }
     }
 
@@ -132,6 +140,43 @@ struct StatsEngine {
             cells[key] = cell
         }
         return cells.values.sorted { ($0.day, $0.hour) < ($1.day, $1.hour) }
+    }
+
+    /// This week against the same stretch of last week.
+    ///
+    /// Compared at the same *phase* of the window, not week-to-date against a
+    /// whole week — three days in, the honest comparison is against the first
+    /// three days of the previous week.
+    struct WeekOverWeek {
+        var app: AppKind
+        var elapsed: TimeInterval
+        var current: Int
+        var previous: Int
+        /// Relative change, or nil when the earlier week has nothing to compare.
+        var change: Double? {
+            previous > 0 ? Double(current) / Double(previous) - 1 : nil
+        }
+        /// The earlier week expressed in percent of the limit, at the current
+        /// window's token-per-percent rate. An estimate, and labelled as one.
+        var previousPercent: Double?
+    }
+
+    func weekOverWeek(app: AppKind, snapshot: LimitsSnapshot?,
+                      tokensPerPercent: Double? = nil,
+                      now: Date = Date()) throws -> WeekOverWeek? {
+        let start = snapshot?.window(minutes: 10_080)?.windowStart(now: now)
+            ?? now.addingTimeInterval(-7 * 86_400)
+        let elapsed = now.timeIntervalSince(start)
+        guard elapsed > 3_600 else { return nil }
+
+        let week: TimeInterval = 7 * 86_400
+        let current = try store.totals(since: start, until: now)[app]?.total ?? 0
+        let previous = try store.totals(since: start.addingTimeInterval(-week),
+                                        until: now.addingTimeInterval(-week))[app]?.total ?? 0
+        guard current > 0 || previous > 0 else { return nil }
+
+        return WeekOverWeek(app: app, elapsed: elapsed, current: current, previous: previous,
+                            previousPercent: tokensPerPercent.map { Double(previous) / $0 })
     }
 
     /// Today against the mean of the preceding `days` days, per app.

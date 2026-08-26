@@ -47,6 +47,10 @@ struct CodexIngest {
             // so the last request's input size stands in for it. Stays 0 when
             // the scan resumes past that record.
             var lastContextTokens = 0
+            // Codex puts the model in `turn_context`, one record per turn, ahead
+            // of that turn's `token_count` — which carries no model at all.
+            // Without this the whole Codex side of the model comparison is blank.
+            var currentModel: String?
             var lastPosition = cursor.offset
 
             try LineReader.forEachLine(path: path, from: cursor.offset) { line, position in
@@ -58,6 +62,7 @@ struct CodexIngest {
                         || line.contains(ascii: Marker.sessionMeta)
                         || line.contains(ascii: Marker.threadGoal)
                         || line.contains(ascii: Marker.compacted)
+                        || line.contains(ascii: Marker.turnContext)
                         || (needTitle && line.contains(ascii: Marker.inputText))
                 else { return }
                 guard let root = (try? JSONSerialization.jsonObject(with: line)) as? JSONObject
@@ -65,6 +70,16 @@ struct CodexIngest {
 
                 let payload = root.object("payload") ?? [:]
                 let payloadType = payload.string("type")
+
+                if root.string("type") == "turn_context" {
+                    currentModel = payload.string("model")
+                        ?? payload.object("collaboration_mode")?.object("settings")?.string("model")
+                    return
+                }
+                if payloadType == "thread_settings_applied" {
+                    currentModel = payload.object("thread_settings")?.string("model") ?? currentModel
+                    return
+                }
 
                 // The `token_count` Codex emits beside a compaction reads
                 // literally zero, so the call's own cost is invisible here too.
@@ -129,7 +144,7 @@ struct CodexIngest {
                     uniq: "\(sessionID):\(root.int("ordinal").map(String.init) ?? "None")",
                     sessionID: sessionID,
                     ts: timestamp,
-                    model: info.string("model") ?? payload.string("model"),
+                    model: info.string("model") ?? payload.string("model") ?? currentModel,
                     input: max(input - cached, 0),
                     output: last.int("output_tokens") ?? 0,
                     cacheRead: cached,

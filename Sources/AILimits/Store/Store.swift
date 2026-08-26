@@ -89,6 +89,20 @@ final class Store {
         PRIMARY KEY (app, session_id, ts)
     );
     CREATE INDEX IF NOT EXISTS idx_compactions_ts ON compactions (ts);
+
+    -- Okna, które dostawca mierzy osobno per model (Claude: weekly_scoped).
+    -- To jedyny bezpośredni sygnał „ile limitu kosztuje ten konkretny model",
+    -- więc zbieramy go od teraz, żeby za tydzień było z czego liczyć.
+    CREATE TABLE IF NOT EXISTS scoped_limits (
+        ts          REAL NOT NULL,
+        app         TEXT NOT NULL,
+        label       TEXT NOT NULL,
+        window_mins INTEGER NOT NULL,
+        pct         REAL NOT NULL,
+        resets_at   REAL,
+        PRIMARY KEY (ts, app, label, window_mins)
+    );
+    CREATE INDEX IF NOT EXISTS idx_scoped_ts ON scoped_limits (ts);
     """
 }
 
@@ -154,11 +168,19 @@ extension Store {
         guard !events.isEmpty else { return 0 }
         return try sync { db in
             try db.transaction {
+                // Idempotent as before, with one exception: a row whose model
+                // was never recorded takes one when a later pass can name it.
+                // Codex keeps the model in `turn_context`, so events ingested
+                // before that was understood have a NULL here. Nothing else is
+                // ever overwritten — the token counts stay untouched.
                 let stmt = try db.prepare("""
-                    INSERT OR IGNORE INTO usage_events
+                    INSERT INTO usage_events
                         (app, uniq, session_id, ts, model,
                          input, output, cache_read, cache_write, reasoning, sidechain)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(app, uniq) DO UPDATE SET
+                        model = COALESCE(usage_events.model, excluded.model)
+                    WHERE usage_events.model IS NULL AND excluded.model IS NOT NULL
                     """)
                 var inserted = 0
                 for event in events {
@@ -230,12 +252,27 @@ extension Store {
         }
     }
 
+    func add(scopedSample sample: LimitSample, label: String) throws {
+        try sync { db in
+            let stmt = try db.prepare("""
+                INSERT OR REPLACE INTO scoped_limits (ts, app, label, window_mins, pct, resets_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """)
+            stmt.bindAll([sample.ts, sample.app.rawValue, label, sample.windowMinutes,
+                          sample.pct, sample.resetsAt])
+            try stmt.run()
+        }
+    }
+
     /// Drops limit history older than `days`. Usage events are never pruned.
     func pruneLimits(olderThan days: Int = 30) throws {
         try sync { db in
-            let stmt = try db.prepare("DELETE FROM limit_samples WHERE ts < ?")
-            stmt.bind(1, Date().addingTimeInterval(-Double(days) * 86_400).timeIntervalSince1970)
-            try stmt.run()
+            let cutoff = Date().addingTimeInterval(-Double(days) * 86_400).timeIntervalSince1970
+            for table in ["limit_samples", "scoped_limits"] {
+                let stmt = try db.prepare("DELETE FROM \(table) WHERE ts < ?")
+                stmt.bind(1, cutoff)
+                try stmt.run()
+            }
         }
     }
 }

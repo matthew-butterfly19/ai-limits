@@ -56,5 +56,11 @@ struct RefreshCoordinator {
                 ts: snapshot.takenAt, app: snapshot.app,
                 windowMinutes: window.minutes, pct: window.pct, resetsAt: window.resetsAt))
         }
+        for scoped in snapshot.scoped {
+            try? store.add(scopedSample: LimitSample(
+                ts: snapshot.takenAt, app: snapshot.app,
+                windowMinutes: scoped.window.minutes, pct: scoped.window.pct,
+                resetsAt: scoped.window.resetsAt), label: scoped.label)
+        }
     }
 }

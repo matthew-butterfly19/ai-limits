@@ -48,6 +48,7 @@ enum CommandLineTool {
             case "compactions": try compactionsReport(store)
             case "totals":  try totals(store, since: options["since"])
             case "threads": try threads(store, since: options["since"])
+            case "models":  try modelsReport(store, since: options["since"])
             case "limits":  try limits(store)
             case "help":    usage()
             default:
@@ -69,6 +70,7 @@ enum CommandLineTool {
           --ingest  [--db PATH]              wczytaj nowe linie logów
           --totals  [--db PATH] [--since ISO] sumy tokenów per aplikacja
           --threads [--db PATH] [--since ISO] najcięższe wątki
+          --models  [--db PATH] [--since ISO] co który model daje za co zużywa
           --limits                            odczytaj limity na żywo
           --compactions [--db PATH]           kompakty kontekstu i ich szacowany koszt
           --backfill    [--db PATH]           wyzeruj kursory i przejdź logi od nowa
@@ -118,6 +120,34 @@ enum CommandLineTool {
                          Format.tokens(thread.totals.total) as NSString,
                          Format.project(thread.cwd) as NSString,
                          String(thread.displayTitle.prefix(70)) as NSString))
+        }
+    }
+
+    private static func modelsReport(_ store: Store, since: String?) throws {
+        let stats = StatsEngine(store: store)
+        let rows = try stats.modelEfficiency(since: parseSince(since))
+        func pad(_ text: String, _ width: Int, right: Bool = true) -> String {
+            let missing = max(0, width - text.count)
+            let filler = String(repeating: " ", count: missing)
+            return right ? filler + text : text + filler
+        }
+        func share(_ value: Double?) -> String {
+            value.map { "\(Int(($0 * 100).rounded()))%" } ?? "—"
+        }
+        print(pad("aplikacja", 11, right: false) + pad("model", 16, right: false)
+              + pad("tokeny", 9) + pad("wyjście", 9) + pad("wyj/turę", 10)
+              + pad("cache", 7) + pad("myślenie", 10) + pad("tury", 7)
+              + pad("%/Mtok", 9))
+        for row in rows.prefix(20) where row.totals.total > 0 {
+            print(pad(row.app.display, 11, right: false)
+                  + pad(Format.model(row.model), 16, right: false)
+                  + pad(Format.tokens(row.totals.total), 9)
+                  + pad(Format.tokens(row.totals.output), 9)
+                  + pad(row.outputPerTurn.map { Format.tokens(Int($0)) } ?? "—", 10)
+                  + pad(share(row.cacheHitRate), 7)
+                  + pad(share(row.reasoningShare), 10)
+                  + pad("\(row.totals.events)", 7)
+                  + pad(row.limitPerMillion.map { Format.decimal($0, places: 2) } ?? "—", 9))
         }
     }
 

@@ -66,10 +66,10 @@ struct BarRow: View {
                 Text(title)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                 Spacer(minLength: 6)
                 Text(Format.tokens(value))
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
@@ -81,7 +81,7 @@ struct BarRow: View {
             .frame(height: 4)
             if let subtitle {
                 Text(subtitle)
-                    .font(.system(size: 10))
+                    .font(.system(size: 12))
                     .foregroundStyle(Palette.muted)
                     .lineLimit(1)
             }
@@ -97,7 +97,7 @@ struct Chip: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 9, weight: .medium))
+            .font(.system(size: 12, weight: .medium))
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
             .background(color.opacity(0.16), in: RoundedRectangle(cornerRadius: 4, style: .continuous))

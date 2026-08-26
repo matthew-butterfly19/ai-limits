@@ -24,7 +24,7 @@ enum LimitsError: LocalizedError {
         case .processFailed(let s): return s
         case .timedOut(let s):     return "\(s) nie odpowiedział w czasie"
         case .throttled(let retry):
-            let when = retry.map { " – ponów za \(Format.timeLeft($0))" } ?? ""
+            let when = (retry ?? 0) > 0 ? " – ponów za \(Format.timeLeft(retry!))" : ""
             return "za częste odpytywanie limitów\(when)"
         }
     }

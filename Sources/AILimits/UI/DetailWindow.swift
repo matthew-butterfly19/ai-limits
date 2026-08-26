@@ -28,6 +28,8 @@ struct DetailWindow: View {
     @State private var hours: [HourBucket] = []
     @State private var limits: [LimitSample] = []
     @State private var projects: [StatsEngine.ProjectShare] = []
+    @State private var models: [ModelEfficiency] = []
+    @State private var tokensPerPercent: [AppKind: Double] = [:]
     @State private var expanded: Set<String> = []
 
     var body: some View {
@@ -38,6 +40,7 @@ struct DetailWindow: View {
                 VStack(alignment: .leading, spacing: 22) {
                     hourlyChart
                     limitChart
+                    modelTable
                     projectList
                     threadTable
                 }
@@ -51,7 +54,7 @@ struct DetailWindow: View {
 
     private var header: some View {
         HStack {
-            Text("Zużycie tokenów").font(.system(size: 15, weight: .semibold))
+            Text("Zużycie tokenów").font(.system(size: 16, weight: .semibold))
             Spacer()
             Picker("", selection: $period) {
                 ForEach(Period.allCases) { Text($0.rawValue).tag($0) }
@@ -68,7 +71,7 @@ struct DetailWindow: View {
 
     private var hourlyChart: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Tokeny w godzinach (czas lokalny)").font(.system(size: 12, weight: .semibold))
+            Text("Tokeny w godzinach (czas lokalny)").font(.system(size: 14, weight: .semibold))
             Chart(hours, id: \.hourStart) { bucket in
                 BarMark(
                     x: .value("Godzina", bucket.hourStart, unit: .hour),
@@ -89,7 +92,7 @@ struct DetailWindow: View {
 
     private var limitChart: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Wykorzystanie limitów").font(.system(size: 12, weight: .semibold))
+            Text("Wykorzystanie limitów").font(.system(size: 14, weight: .semibold))
             Chart {
                 ForEach(limitSeries, id: \.key) { series in
                     ForEach(series.points, id: \.ts) { point in
@@ -112,7 +115,7 @@ struct DetailWindow: View {
             } }
             .frame(height: 190)
             Text("linia ciągła — okno 5 h, przerywana — okno tygodniowe")
-                .font(.system(size: 9)).foregroundStyle(Palette.muted)
+                .font(.system(size: 12)).foregroundStyle(Palette.muted)
         }
     }
 
@@ -159,11 +162,92 @@ struct DetailWindow: View {
         return series
     }
 
+    /// The "which model is worth using" table.
+    ///
+    /// Everything here is measured, nothing is priced: on a subscription the
+    /// cost is limit percent, and only some windows are metered per model.
+    private var modelTable: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Modele — co za co").font(.system(size: 14, weight: .semibold))
+                Spacer()
+                ForEach(AppKind.allCases, id: \.self) { app in
+                    if let perPercent = tokensPerPercent[app] {
+                        Text("\(app.display): 1% ≈ \(Format.tokens(Int(perPercent)))")
+                            .font(.system(size: 12)).foregroundStyle(Palette.muted)
+                    }
+                }
+            }
+            HStack(spacing: 0) {
+                head("model", 150, .leading)
+                head("tokeny", 70)
+                head("wyjście", 70)
+                head("wyjście/turę", 80)
+                head("cache", 55)
+                head("myślenie", 65)
+                head("tury", 55)
+                head("% limitu / Mtok", 100)
+            }
+            ForEach(models.prefix(14)) { row in
+                HStack(spacing: 0) {
+                    HStack(spacing: 5) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(model.modelColors.color(for: row.model))
+                            .frame(width: 8, height: 8)
+                        Text(Format.model(row.model)).font(.system(size: 12)).lineLimit(1)
+                    }
+                    .frame(width: 150, alignment: .leading)
+                    cell(Format.tokens(row.totals.total))
+                    cell(Format.tokens(row.totals.output))
+                    cell(row.outputPerTurn.map { Format.tokens(Int($0)) } ?? "—", width: 80)
+                    cell(share(row.cacheHitRate), width: 55)
+                    cell(share(row.reasoningShare), width: 65)
+                    cell("\(row.totals.events)", width: 55)
+                    cell(row.limitPerMillion.map { Format.decimal($0, places: 2) } ?? "—", width: 100)
+                }
+                .help(tooltip(for: row))
+            }
+            Text("Kolumna „% limitu / Mtok” wypełnia się tylko dla modeli, którym dostawca "
+                 + "liczy osobne okno — u reszty nie da się tego zmierzyć, "
+                 + "a zgadywać nie będziemy.")
+                .font(.system(size: 12)).foregroundStyle(Palette.muted)
+        }
+    }
+
+    private func head(_ text: String, _ width: CGFloat,
+                      _ alignment: Alignment = .trailing) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(Palette.muted)
+            .frame(width: width, alignment: alignment)
+    }
+
+    private func cell(_ text: String, width: CGFloat = 70) -> some View {
+        Text(text)
+            .font(.system(size: 12)).monospacedDigit()
+            .frame(width: width, alignment: .trailing)
+    }
+
+    private func share(_ value: Double?) -> String {
+        value.map { "\(Int(($0 * 100).rounded()))%" } ?? "—"
+    }
+
+    private func tooltip(for row: ModelEfficiency) -> String {
+        var lines = ["\(row.model ?? "—") · \(row.app.display)",
+                     "łącznie \(Format.tokensFull(row.totals.total)), "
+                     + "bez cache \(Format.tokensFull(row.totals.billable))"]
+        if let cost = row.limitPerMillion {
+            lines.append("\(Format.decimal(cost, places: 2)) % okna tygodniowego na milion "
+                         + "tokenów (z \(row.limitSamples) odczytów)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: - tables
 
     private var projectList: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Udział projektów").font(.system(size: 12, weight: .semibold))
+            Text("Udział projektów").font(.system(size: 14, weight: .semibold))
             ForEach(projects.prefix(8)) { share in
                 BarRow(title: share.project,
                        subtitle: share.app.display,
@@ -176,7 +260,7 @@ struct DetailWindow: View {
 
     private var threadTable: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Wątki i modele").font(.system(size: 12, weight: .semibold))
+            Text("Wątki i modele").font(.system(size: 14, weight: .semibold))
             ForEach(rows) { row in
                 VStack(alignment: .leading, spacing: 4) {
                     Button {
@@ -186,7 +270,7 @@ struct DetailWindow: View {
                         HStack(spacing: 8) {
                             Image(systemName: expanded.contains(row.id)
                                   ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 8)).foregroundStyle(Palette.muted)
+                                .font(.system(size: 12)).foregroundStyle(Palette.muted)
                             Circle().fill(Palette.color(for: row.thread.app))
                                 .frame(width: 7, height: 7)
                             Text(row.thread.displayTitle).lineLimit(1).font(.system(size: 12))
@@ -195,7 +279,7 @@ struct DetailWindow: View {
                             Text(Format.tokens(row.thread.totals.total))
                                 .font(.system(size: 12, weight: .medium)).monospacedDigit()
                             Text(Format.tokens(row.thread.totals.billable))
-                                .font(.system(size: 11)).monospacedDigit()
+                                .font(.system(size: 12)).monospacedDigit()
                                 .foregroundStyle(Palette.muted)
                                 .frame(width: 54, alignment: .trailing)
                         }
@@ -230,10 +314,10 @@ struct DetailWindow: View {
             }
             ForEach(row.models) { entry in
                 HStack(spacing: 6) {
-                    Text(Format.model(entry.model)).font(.system(size: 10))
+                    Text(Format.model(entry.model)).font(.system(size: 12))
                         .frame(width: 140, alignment: .leading)
                     Text(Format.tokensFull(entry.totals.total))
-                        .font(.system(size: 10)).monospacedDigit().foregroundStyle(.secondary)
+                        .font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
                     Spacer()
                 }
             }
@@ -244,9 +328,9 @@ struct DetailWindow: View {
 
     private func stat(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(label.uppercased()).font(.system(size: 8, weight: .semibold))
+            Text(label.uppercased()).font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Palette.muted)
-            Text(value).font(.system(size: 11)).monospacedDigit()
+            Text(value).font(.system(size: 12)).monospacedDigit()
         }
     }
 
@@ -258,6 +342,13 @@ struct DetailWindow: View {
         rows = (try? stats.threadRows(since: since, limit: 40)) ?? []
         projects = (try? stats.projectShares(since: since)) ?? []
         hours = (try? stats.hourly(hours: period == .week ? 168 : 24)) ?? []
+        models = (try? stats.modelEfficiency(since: since)) ?? []
+        var perPercent: [AppKind: Double] = [:]
+        for app in AppKind.allCases {
+            perPercent[app] = (try? stats.forecast(app: app, snapshot: model.snapshots[app],
+                                                   minutes: 300))??.tokensPerPercent
+        }
+        tokensPerPercent = perPercent
         limits = (try? model.store?.limitHistory(
             since: since ?? Date().addingTimeInterval(-7 * 86_400))) ?? []
     }

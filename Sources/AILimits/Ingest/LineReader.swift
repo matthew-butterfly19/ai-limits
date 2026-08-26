@@ -74,4 +74,5 @@ enum Marker {
     static let inputText  = Array(#""input_text""#.utf8)
     static let compactBoundary = Array(#""compact_boundary""#.utf8)
     static let compacted  = Array(#""compacted""#.utf8)
+    static let turnContext = Array(#""turn_context""#.utf8)
 }

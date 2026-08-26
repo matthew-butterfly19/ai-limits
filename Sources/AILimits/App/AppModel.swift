@@ -13,15 +13,28 @@ final class AppModel: ObservableObject {
     @Published private(set) var menuBarTitle = "AI limits …"
     @Published private(set) var snapshots: [AppKind: LimitsSnapshot] = [:]
     @Published private(set) var windowTotals: [AppKind: TokenTotals] = [:]
-    @Published private(set) var burnRates: [AppKind: StatsEngine.BurnRate] = [:]
+    @Published private(set) var forecasts: [AppKind: [Forecast]] = [:]
     @Published private(set) var threads: [StatsEngine.ThreadRow] = []
     @Published private(set) var compactions: [AppKind: [Compaction]] = [:]
+    @Published private(set) var weekOverWeek: [AppKind: StatsEngine.WeekOverWeek] = [:]
+    /// Tokens per one percent of the 5 h window, per app — the exchange rate
+    /// between what the logs measure and what the limit actually charges.
+    @Published private(set) var tokensPerPercent: [AppKind: Double] = [:]
     /// Fixed once from the whole history, never re-derived per view.
     @Published private(set) var modelColors = ModelColors(models: [])
     @Published private(set) var lastRefresh: Date?
     @Published private(set) var errors: [AppKind: String] = [:]
     @Published private(set) var fatalError: String?
     @Published var isRefreshing = false
+
+    /// What the menu bar leads with. Persisted, because it is a preference.
+    @Published var titleMode: TitleMode = .forecast {
+        didSet {
+            UserDefaults.standard.set(titleMode.rawValue, forKey: Self.titleModeKey)
+            rebuildTitle()
+        }
+    }
+    private static let titleModeKey = "menuBarMode"
 
     /// How often the cycle runs on its own. Two minutes matches the cadence the
     /// SwiftBar plugin ran at, which proved frequent enough to catch a window
@@ -42,6 +55,8 @@ final class AppModel: ObservableObject {
         } catch {
             fatalError = "\(error)"
         }
+        titleMode = UserDefaults.standard.string(forKey: Self.titleModeKey)
+            .flatMap(TitleMode.init(rawValue:)) ?? .forecast
         modelColors = ModelColors(models: (try? store?.distinctModels()) ?? [])
         loadCachedSnapshots()
         rebuildTitle()
@@ -84,11 +99,20 @@ final class AppModel: ObservableObject {
         for (app, snapshot) in result.snapshots { snapshots[app] = snapshot }
         errors = result.errors
 
+        var rates: [AppKind: Double] = [:]
         for app in AppKind.allCases {
             windowTotals[app] = (try? stats.currentWindowTotals(snapshot: snapshots[app])) ?? nil
-            burnRates[app] = (try? stats.burnRate(app: app, minutes: 300)) ?? nil
+            let windows = (try? stats.forecasts(app: app, snapshot: snapshots[app])) ?? []
+            forecasts[app] = windows
+            rates[app] = windows.first { $0.minutes == 300 }?.tokensPerPercent
         }
-        threads = (try? stats.threadRows(since: earliestWindowStart(), limit: 12)) ?? []
+        tokensPerPercent = rates
+        for app in AppKind.allCases {
+            weekOverWeek[app] = (try? stats.weekOverWeek(app: app, snapshot: snapshots[app],
+                                                         tokensPerPercent: rates[app])) ?? nil
+        }
+        threads = (try? stats.threadRows(since: earliestWindowStart(), limit: 12,
+                                         tokensPerPercent: rates)) ?? []
         let compacted = (try? store.compactions(since: earliestWindowStart())) ?? []
         compactions = Dictionary(grouping: compacted, by: \.app)
         if let models = try? store.distinctModels(), models.count != modelColors.count {
@@ -116,6 +140,7 @@ final class AppModel: ObservableObject {
     }
 
     private func rebuildTitle() {
-        menuBarTitle = MenuBarTitle.render(snapshots: snapshots, totals: windowTotals)
+        menuBarTitle = MenuBarTitle.render(snapshots: snapshots, totals: windowTotals,
+                                           forecasts: forecasts, mode: titleMode)
     }
 }
