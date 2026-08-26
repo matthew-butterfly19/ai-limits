@@ -73,12 +73,18 @@ struct BarRow: View {
                     .monospacedDigit()
                     .foregroundStyle(Palette.muted)
             }
+            // Z torem pod spodem — sam wypełniony kawałek pod tytułem czytał się
+            // jak podkreślenie linku, a nie jak miara.
             GeometryReader { geometry in
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(color)
-                    .frame(width: max(2, geometry.size.width * CGFloat(min(max(fraction, 0), 1))))
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(Palette.gridline)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(color)
+                        .frame(width: max(3, geometry.size.width * CGFloat(min(max(fraction, 0), 1))))
+                }
             }
-            .frame(height: 4)
+            .frame(height: 6)
             if let subtitle {
                 Text(subtitle)
                     .font(.system(size: 12))

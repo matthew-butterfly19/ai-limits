@@ -258,6 +258,11 @@ struct ThreadLine: View {
         if let project = row.thread.project { lines.append("projekt: \(project)") }
         if let percent = row.limitPercent {
             lines.append("≈\(Format.decimal(percent)) % okna 5 h")
+            lines.append("To udział wątku w tokenach okna przeliczony na procenty limitu. "
+                         + "Zakłada, że token kosztuje tyle samo niezależnie od modelu — "
+                         + "suma po wątkach zgadza się co do procenta, ale podział między nie "
+                         + "przesuwa się, jeśli wątki korzystały z różnych modeli. "
+                         + "Dostawcy nie podają wag per model.")
         }
         lines.append("\(Format.tokensFull(row.thread.totals.total)) tokenów, "
                      + "\(row.thread.totals.events) tur")

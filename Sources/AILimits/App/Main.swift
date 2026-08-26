@@ -49,6 +49,7 @@ enum CommandLineTool {
             case "totals":  try totals(store, since: options["since"])
             case "threads": try threads(store, since: options["since"])
             case "models":  try modelsReport(store, since: options["since"])
+            case "check":   try check(store)
             case "limits":  try limits(store)
             case "help":    usage()
             default:
@@ -72,6 +73,7 @@ enum CommandLineTool {
           --threads [--db PATH] [--since ISO] najcięższe wątki
           --models  [--db PATH] [--since ISO] co który model daje za co zużywa
           --limits                            odczytaj limity na żywo
+          --check   [--db PATH]               co widzi okno szczegółów (diagnostyka)
           --compactions [--db PATH]           kompakty kontekstu i ich szacowany koszt
           --backfill    [--db PATH]           wyzeruj kursory i przejdź logi od nowa
         """)
@@ -121,6 +123,24 @@ enum CommandLineTool {
                          Format.project(thread.cwd) as NSString,
                          String(thread.displayTitle.prefix(70)) as NSString))
         }
+    }
+
+    /// Prints what each section of the detail window would receive. Faster
+    /// than guessing from a screenshot why a chart came out blank.
+    private static func check(_ store: Store) throws {
+        let stats = StatsEngine(store: store)
+        let day = Date().addingTimeInterval(-24 * 3_600)
+        let week = Date().addingTimeInterval(-7 * 86_400)
+        func line(_ label: String, _ count: Int) {
+            print("  \(count == 0 ? "PUSTE" : "  ok "). \(label): \(count)")
+        }
+        line("hourly(24 h) — kubełki", (try? stats.hourly(hours: 24).count) ?? -1)
+        line("hourly(168 h) — kubełki", (try? stats.hourly(hours: 168).count) ?? -1)
+        line("weekComparison — dni", (try? stats.weekComparison().count) ?? -1)
+        line("limitHistory(7 dni) — próbki", (try? store.limitHistory(since: week).count) ?? -1)
+        line("modelEfficiency(7 dni) — wiersze", (try? stats.modelEfficiency(since: week).count) ?? -1)
+        line("projectShares(24 h) — wiersze", (try? stats.projectShares(since: day).count) ?? -1)
+        line("threadRows(24 h) — wiersze", (try? stats.threadRows(since: day, limit: 40).count) ?? -1)
     }
 
     private static func modelsReport(_ store: Store, since: String?) throws {

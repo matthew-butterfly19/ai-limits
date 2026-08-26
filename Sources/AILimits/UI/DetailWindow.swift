@@ -21,6 +21,7 @@ enum Period: String, CaseIterable, Identifiable {
 
 struct DetailWindow: View {
     static let identifier = "ailimits-detail"
+    private static let topAnchor = "top"
 
     @EnvironmentObject private var model: AppModel
     @State private var period: Period = .day
@@ -40,16 +41,25 @@ struct DetailWindow: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    hourlyChart
-                    weekChart
-                    limitChart
-                    modelTable
-                    projectList
-                    threadTable
+            // Bez tego SwiftUI potrafi otworzyć okno na zapamiętanym przewinięciu
+            // i pierwsze wykresy zostają nad krawędzią — wygląda, jakby ich nie było.
+            ScrollViewReader { scroll in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 22) {
+                        hourlyChart
+                            .id(Self.topAnchor)
+                        weekChart
+                        limitChart
+                        modelTable
+                        projectList
+                        threadTable
+                    }
+                    .padding(18)
                 }
-                .padding(18)
+                .onChange(of: period) { _, _ in
+                    scroll.scrollTo(Self.topAnchor, anchor: .top)
+                }
+                .onAppear { scroll.scrollTo(Self.topAnchor, anchor: .top) }
             }
         }
         .background(Palette.surface)
@@ -336,7 +346,7 @@ struct DetailWindow: View {
                 head("tury", 55)
                 head("% limitu / Mtok", 100)
             }
-            ForEach(models.prefix(14)) { row in
+            ForEach(models.filter { $0.totals.total > 0 }.prefix(14)) { row in
                 HStack(spacing: 0) {
                     HStack(spacing: 5) {
                         RoundedRectangle(cornerRadius: 2)
