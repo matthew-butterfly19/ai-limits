@@ -35,16 +35,37 @@ struct CachedLimits: LimitsProvider {
         return snapshot
     }
 
+    /// Unix epoch seconds, not Foundation's 2001 reference date. This file is
+    /// read by the SwiftBar plugin during the transition, and every other
+    /// timestamp in the project is epoch — a second convention here would be a
+    /// 31-year error waiting to happen.
+    private static var encoder: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        return encoder
+    }
+
+    private static var decoder: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        return decoder
+    }
+
     private func save(_ snapshot: LimitsSnapshot) {
         var value = snapshot
         value.staleReason = nil
-        guard let data = try? JSONEncoder().encode(value) else { return }
+        guard let data = try? Self.encoder.encode(value) else { return }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try? data.write(to: cacheURL, options: .atomic)
     }
 
     private func load() -> LimitsSnapshot? {
-        guard let data = try? Data(contentsOf: cacheURL) else { return nil }
-        return try? JSONDecoder().decode(LimitsSnapshot.self, from: data)
+        guard let data = try? Data(contentsOf: cacheURL),
+              let snapshot = try? Self.decoder.decode(LimitsSnapshot.self, from: data)
+        else { return nil }
+        // A day-old set of percentages says nothing useful, and a file written
+        // under an older date convention would land decades away.
+        guard abs(snapshot.takenAt.timeIntervalSinceNow) < 86_400 else { return nil }
+        return snapshot
     }
 }

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Renderowanie paska menu dla SwiftBara."""
 
+import json
 import os
 import time
 from datetime import datetime
@@ -39,7 +40,6 @@ def _refresh(win):
 
 
 def _load_cache():
-    import json
     try:
         with open(CACHE_JSON) as fh:
             return json.load(fh)
@@ -48,7 +48,6 @@ def _load_cache():
 
 
 def _save_cache(data):
-    import json
     try:
         os.makedirs(store.DATA_DIR, exist_ok=True)
         with open(CACHE_JSON, "w") as fh:
@@ -57,12 +56,60 @@ def _save_cache(data):
         pass
 
 
+# Natywna aplikacja trzyma tu swój ostatni odczyt. Kiedy chodzi, to ona pyta
+# dostawców – dwa procesy odpytujące ten sam endpoint co 2 minuty dostają 429
+# i oba lądują na nieświeżych danych.
+NATIVE_CACHE = os.path.join(store.DATA_DIR, "limits-%s.json")
+NATIVE_MAX_AGE = 180
+
+
+def _native(app):
+    """Odczyt natywnej aplikacji, jeśli jest świeży. None, gdy jej nie ma."""
+    # Wąsko, bo gołe `except Exception` zamieniłoby literówkę w kodzie w ciche
+    # „brak cache" – dokładnie tak ta funkcja zgubiła NameError za pierwszym razem.
+    try:
+        with open(NATIVE_CACHE % app) as fh:
+            snap = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if time.time() - (snap.get("takenAt") or 0) > NATIVE_MAX_AGE:
+        return None
+
+    now = time.time()
+
+    def win(node):
+        resets = node.get("resetsAt")
+        return {"pct": node.get("pct"), "resets": resets,
+                "left": (resets - now) if resets else None, "severity": None}
+
+    wins = {int(w["minutes"]): win(w) for w in snap.get("windows") or []}
+    if not wins:
+        return None
+    if app == "claude":
+        out = {"plan": snap.get("planName"), "tier": None,
+               "five_hour": wins.get(300), "seven_day": wins.get(10080),
+               "scoped": [], "extra": {}}
+        for entry in snap.get("scoped") or []:
+            row = win(entry.get("window") or {})
+            row["label"] = entry.get("label") or "model"
+            out["scoped"].append(row)
+    else:
+        out = {"plan": snap.get("planName"), "windows": wins,
+               "credits": {}, "reached": None}
+    out["_from_app"] = True
+    return out
+
+
 def _fetch(con):
     """Bieżące limity + zapis próbki do historii. Przy błędzie wraca ostatnia znana wartość."""
     cache = _load_cache()
     stale, errors = [], {}
 
     def one(name, fn, app):
+        shared = _native(app)
+        if shared:
+            cache[name] = {"data": shared, "at": time.time()}
+            return shared
         try:
             data = fn()
             cache[name] = {"data": data, "at": time.time()}
@@ -80,12 +127,14 @@ def _fetch(con):
     _save_cache(cache)
 
     # historia do wykresu – tylko świeże odczyty
-    if cc and "ClaudeCode" not in errors:
+    # Próbki zapisuje ten, kto naprawdę pytał – inaczej ta sama wartość wpada do
+    # historii dwa razy, pod dwoma znacznikami czasu.
+    if cc and "ClaudeCode" not in errors and not cc.get("_from_app"):
         for mins, key in ((300, "five_hour"), (10080, "seven_day")):
             w = cc.get(key)
             if w and w.get("pct") is not None:
                 store.add_limit_sample(con, "claude", mins, w["pct"], w.get("resets"))
-    if cx and "Codex" not in errors:
+    if cx and "Codex" not in errors and not cx.get("_from_app"):
         for mins, w in (cx.get("windows") or {}).items():
             if w.get("pct") is not None:
                 store.add_limit_sample(con, "codex", int(mins), w["pct"], w.get("resets"))
