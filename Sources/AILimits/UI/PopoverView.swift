@@ -178,12 +178,11 @@ struct AppSection: View {
         guard !rows.isEmpty else { return nil }
         var byModel: [String: Int] = [:]
         for row in rows { byModel[row.model ?? "—", default: 0] += row.totals.total }
-        let colors = ModelColors(models: Array(byModel.keys))
         return byModel
             .sorted { $0.value > $1.value }
             .prefix(6)
             .map { StackedBar.Segment(id: $0.key, value: $0.value,
-                                      color: colors.color(for: $0.key),
+                                      color: model.modelColors.color(for: $0.key),
                                       label: Format.model($0.key)) }
     }
 

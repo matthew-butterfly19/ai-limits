@@ -24,6 +24,13 @@ struct ClaudeLiveLimits: LimitsProvider {
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             if http.statusCode == 401 { throw LimitsError.tokenExpired }
+            // 429 here is throttling of the *usage* endpoint, not the account
+            // limit being reached — the cached snapshot stays valid, so this
+            // must never look like "limit wyczerpany".
+            if http.statusCode == 429 {
+                let retry = (http.value(forHTTPHeaderField: "retry-after")).flatMap(Double.init)
+                throw LimitsError.throttled(retryAfter: retry)
+            }
             throw LimitsError.processFailed("api.anthropic.com odpowiedziało \(http.statusCode)")
         }
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? JSONObject else {

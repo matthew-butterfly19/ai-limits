@@ -14,6 +14,7 @@ enum LimitsError: LocalizedError {
     case emptyResponse(String)
     case processFailed(String)
     case timedOut(String)
+    case throttled(retryAfter: TimeInterval?)
 
     var errorDescription: String? {
         switch self {
@@ -22,6 +23,9 @@ enum LimitsError: LocalizedError {
         case .emptyResponse(let s): return "odpowiedź bez danych o limitach (\(s))"
         case .processFailed(let s): return s
         case .timedOut(let s):     return "\(s) nie odpowiedział w czasie"
+        case .throttled(let retry):
+            let when = retry.map { " – ponów za \(Format.timeLeft($0))" } ?? ""
+            return "za częste odpytywanie limitów\(when)"
         }
     }
 }

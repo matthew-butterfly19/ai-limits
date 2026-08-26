@@ -84,6 +84,21 @@ extension Store {
         }
     }
 
+    /// Every model that has ever appeared in the logs, sorted. Used to pin one
+    /// palette slot per model for the lifetime of the app, so a filter that
+    /// changes which models are on screen never repaints the survivors.
+    func distinctModels() throws -> [String] {
+        try sync { db in
+            var models: [String] = []
+            let stmt = try db.prepare(
+                "SELECT DISTINCT model FROM usage_events WHERE model IS NOT NULL ORDER BY model")
+            try stmt.forEachRow { row in
+                if let model = row.string(0) { models.append(model) }
+            }
+            return models
+        }
+    }
+
     // MARK: - reads
 
     func totals(since: Date? = nil, until: Date? = nil) throws -> [AppKind: TokenTotals] {

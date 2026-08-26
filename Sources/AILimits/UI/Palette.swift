@@ -69,6 +69,8 @@ struct ModelColors {
         }
     }
 
+    var count: Int { slots.count }
+
     func color(for model: String?) -> Color {
         guard let model, let slot = slots[model] else { return Palette.other }
         return slot < Palette.categorical.count ? Palette.categorical[slot] : Palette.other
