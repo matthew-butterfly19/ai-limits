@@ -20,6 +20,9 @@ final class Store {
                                                 withIntermediateDirectories: true)
         db = try Database(path: path)
         try db.execute(Store.schema)
+        // Added after the first release; the column may already be there, and
+        // SQLite has no ADD COLUMN IF NOT EXISTS.
+        try? db.execute("ALTER TABLE sessions ADD COLUMN title_custom INTEGER NOT NULL DEFAULT 0")
     }
 
     /// Runs `body` with exclusive access to the connection.
@@ -201,10 +204,17 @@ extension Store {
     func touch(session: SessionInfo) throws {
         try sync { db in
             let stmt = try db.prepare("""
-                INSERT INTO sessions (app, session_id, title, cwd, origin, first_ts, last_ts)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO sessions
+                    (app, session_id, title, cwd, origin, first_ts, last_ts, title_custom)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(app, session_id) DO UPDATE SET
-                    title    = COALESCE(excluded.title, sessions.title),
+                    title = CASE
+                        WHEN excluded.title IS NULL      THEN sessions.title
+                        WHEN excluded.title_custom = 1   THEN excluded.title
+                        WHEN sessions.title_custom = 1   THEN sessions.title
+                        ELSE excluded.title
+                    END,
+                    title_custom = MAX(sessions.title_custom, excluded.title_custom),
                     cwd      = COALESCE(excluded.cwd, sessions.cwd),
                     origin   = COALESCE(excluded.origin, sessions.origin),
                     first_ts = MIN(COALESCE(sessions.first_ts, excluded.first_ts),
@@ -213,7 +223,8 @@ extension Store {
                                    COALESCE(excluded.last_ts, sessions.last_ts))
                 """)
             stmt.bindAll([session.app.rawValue, session.sessionID, session.title,
-                          session.cwd, session.origin, session.firstTS, session.lastTS])
+                          session.cwd, session.origin, session.firstTS, session.lastTS,
+                          session.titleIsCustom ? 1 : 0])
             try stmt.run()
         }
     }

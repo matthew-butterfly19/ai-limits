@@ -28,7 +28,7 @@ final class AppModel: ObservableObject {
     @Published var isRefreshing = false
 
     /// What the menu bar leads with. Persisted, because it is a preference.
-    @Published var titleMode: TitleMode = .forecast {
+    @Published var titleMode: TitleMode = .compact {
         didSet {
             UserDefaults.standard.set(titleMode.rawValue, forKey: Self.titleModeKey)
             rebuildTitle()
@@ -36,16 +36,21 @@ final class AppModel: ObservableObject {
     }
     private static let titleModeKey = "menuBarMode"
 
-    /// How often the cycle runs on its own. Two minutes matches the cadence the
-    /// SwiftBar plugin ran at, which proved frequent enough to catch a window
-    /// filling up without hammering either backend.
-    static let refreshInterval: TimeInterval = 120
+    /// The screen ticks far more often than the network does.
+    ///
+    /// Time-to-reset is recomputed locally from `resetsAt`, and pulling new log
+    /// lines is a few kilobytes off local disk — neither needs a vendor. The
+    /// limit endpoints do, and asking them every two minutes is what earned the
+    /// stream of 429s, so they get five.
+    static let tickInterval: TimeInterval = 30
+    static let limitsInterval: TimeInterval = 300
 
     private(set) var store: Store?
     private var stats: StatsEngine?
 
     var statsEngine: StatsEngine? { stats }
     private var loop: Task<Void, Never>?
+    private var lastLimitsFetch: Date?
 
     init() {
         do {
@@ -56,7 +61,7 @@ final class AppModel: ObservableObject {
             fatalError = "\(error)"
         }
         titleMode = UserDefaults.standard.string(forKey: Self.titleModeKey)
-            .flatMap(TitleMode.init(rawValue:)) ?? .forecast
+            .flatMap(TitleMode.init(rawValue:)) ?? .compact
         modelColors = ModelColors(models: (try? store?.distinctModels()) ?? [])
         loadCachedSnapshots()
         rebuildTitle()
@@ -70,7 +75,7 @@ final class AppModel: ObservableObject {
         loop = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
-                try? await Task.sleep(nanoseconds: UInt64(Self.refreshInterval * 1_000_000_000))
+                try? await Task.sleep(nanoseconds: UInt64(Self.tickInterval * 1_000_000_000))
             }
         }
     }
@@ -88,16 +93,23 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func refresh() async {
+    /// `force` is the manual refresh button: it asks the vendors regardless of
+    /// how recently they were last asked.
+    func refresh(force: Bool = false) async {
         guard let store, let stats, !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
 
+        let due = force || lastLimitsFetch.map {
+            Date().timeIntervalSince($0) >= Self.limitsInterval
+        } ?? true
+
         let coordinator = RefreshCoordinator(store: store)
-        let result = await coordinator.run()
+        let result = await coordinator.run(fetchLimits: due)
+        if due { lastLimitsFetch = Date() }
 
         for (app, snapshot) in result.snapshots { snapshots[app] = snapshot }
-        errors = result.errors
+        if due { errors = result.errors }
 
         var rates: [AppKind: Double] = [:]
         for app in AppKind.allCases {

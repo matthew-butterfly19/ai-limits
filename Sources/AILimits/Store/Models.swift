@@ -47,6 +47,9 @@ struct SessionInfo: Sendable {
     var origin: String?
     var firstTS: Date?
     var lastTS: Date?
+    /// The user named this thread with `/rename`. A generated title must never
+    /// overwrite a chosen one, whichever arrives later in the log.
+    var titleIsCustom = false
 
     /// Last path component of `cwd` — what the UI shows as the project.
     var project: String? {

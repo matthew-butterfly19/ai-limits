@@ -32,6 +32,9 @@ struct DetailWindow: View {
     @State private var weekDays: [StatsEngine.DayComparison] = []
     @State private var tokensPerPercent: [AppKind: Double] = [:]
     @State private var expanded: Set<String> = []
+    @State private var hourHover: HoverPoint?
+    @State private var weekHover: HoverPoint?
+    @State private var limitHover: HoverPoint?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -49,6 +52,7 @@ struct DetailWindow: View {
                 .padding(18)
             }
         }
+        .background(Palette.surface)
         .frame(minWidth: 820, minHeight: 620)
         .task(id: period) { await reload() }
         .task(id: model.lastRefresh) { await reload() }
@@ -74,14 +78,19 @@ struct DetailWindow: View {
     private var hourlyChart: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Tokeny w godzinach (czas lokalny)").font(.system(size: 14, weight: .semibold))
-            Chart(hours, id: \.hourStart) { bucket in
-                BarMark(
-                    x: .value("Godzina", bucket.hourStart, unit: .hour),
-                    y: .value("Tokeny", bucket.totals.total))
-                .foregroundStyle(by: .value("Aplikacja", bucket.app.display))
-                .cornerRadius(3)
+            Chart {
+                ForEach(hours, id: \.hourStart) { bucket in
+                    BarMark(
+                        x: .value("Godzina", bucket.hourStart, unit: .hour),
+                        y: .value("Tokeny", bucket.totals.total))
+                    .foregroundStyle(by: .value("Aplikacja", bucket.app.display))
+                    .cornerRadius(3)
+                    .opacity(dimmed(bucket.hourStart, hover: hourHover, unit: .hour) ? 0.35 : 1)
+                }
             }
             .chartForegroundStyleScale(appScale)
+            .chartOverlayHover($hourHover)
+            .chartTooltip(at: hourHover) { hourTooltip }
             .chartYAxis { AxisMarks { value in
                 AxisGridLine().foregroundStyle(Palette.gridline)
                 AxisValueLabel {
@@ -121,6 +130,8 @@ struct DetailWindow: View {
                 }
             }
             .chartForegroundStyleScale(appScale)
+            .chartOverlayHover($weekHover)
+            .chartTooltip(at: weekHover) { weekTooltip }
             .chartXAxis { AxisMarks(values: .stride(by: .day)) { value in
                 AxisValueLabel {
                     if let date = value.as(Date.self) { Text(Format.weekday(date)) }
@@ -142,6 +153,11 @@ struct DetailWindow: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Wykorzystanie limitów").font(.system(size: 14, weight: .semibold))
             Chart {
+                if let hover = limitHover {
+                    RuleMark(x: .value("Czas", hover.date))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                        .foregroundStyle(Palette.muted)
+                }
                 ForEach(limitSeries, id: \.key) { series in
                     ForEach(series.points, id: \.ts) { point in
                         LineMark(x: .value("Czas", point.ts),
@@ -154,6 +170,8 @@ struct DetailWindow: View {
                 }
             }
             .chartForegroundStyleScale(appScale)
+            .chartOverlayHover($limitHover)
+            .chartTooltip(at: limitHover) { limitTooltip }
             .chartYScale(domain: 0...100)
             .chartYAxis { AxisMarks(values: [0, 25, 50, 75, 100]) { value in
                 AxisGridLine().foregroundStyle(Palette.gridline)
@@ -164,6 +182,88 @@ struct DetailWindow: View {
             .frame(height: 190)
             Text("linia ciągła — okno 5 h, przerywana — okno tygodniowe")
                 .font(.system(size: 12)).foregroundStyle(Palette.muted)
+        }
+    }
+
+    /// Bars away from the pointer recede rather than disappear — the shape of
+    /// the whole series has to stay readable while one bar is being inspected.
+    private func dimmed(_ date: Date, hover: HoverPoint?, unit: Calendar.Component) -> Bool {
+        guard let hover else { return false }
+        return !Calendar.current.isDate(date, equalTo: hover.date, toGranularity: unit)
+    }
+
+    @ViewBuilder private var hourTooltip: some View {
+        if let hover = hourHover {
+            let bucket = hours.filter {
+                Calendar.current.isDate($0.hourStart, equalTo: hover.date, toGranularity: .hour)
+            }
+            Text(Format.dayHour(hover.date)).font(.system(size: 11, weight: .semibold))
+            if bucket.isEmpty {
+                Text("nic w tej godzinie").font(.system(size: 11)).foregroundStyle(Palette.muted)
+            } else {
+                ForEach(bucket, id: \.app) { row in
+                    TooltipRow(color: Palette.color(for: row.app), label: row.app.display,
+                               value: Format.tokensFull(row.totals.total))
+                }
+                TooltipRow(color: nil, label: "wyjście",
+                           value: Format.tokensFull(bucket.reduce(0) { $0 + $1.totals.output }))
+            }
+        }
+    }
+
+    @ViewBuilder private var weekTooltip: some View {
+        if let hover = weekHover,
+           let day = weekDays.first(where: {
+               Calendar.current.isDate($0.day, equalTo: hover.date, toGranularity: .day)
+           }) {
+            Text(Format.dayDate(day.day)).font(.system(size: 11, weight: .semibold))
+            ForEach(AppKind.allCases, id: \.self) { app in
+                if let tokens = day.byApp[app], tokens > 0 {
+                    TooltipRow(color: Palette.color(for: app), label: app.display,
+                               value: Format.tokensFull(tokens))
+                }
+            }
+            Divider()
+            TooltipRow(color: nil, label: "tydzień wcześniej",
+                       value: day.previousTotal > 0 ? Format.tokensFull(day.previousTotal) : "—")
+            if day.previousTotal > 0, day.total > 0 {
+                let change = Double(day.total) / Double(day.previousTotal) - 1
+                TooltipRow(color: nil, label: "zmiana",
+                           value: "\(change >= 0 ? "+" : "")\(Int((change * 100).rounded()))%")
+            }
+        }
+    }
+
+    @ViewBuilder private var limitTooltip: some View {
+        if let hover = limitHover {
+            Text(Format.when(hover.date)).font(.system(size: 11, weight: .semibold))
+            ForEach(nearestSamples(to: hover.date), id: \.id) { entry in
+                TooltipRow(color: Palette.color(for: entry.sample.app),
+                           label: "\(entry.sample.app.display) · "
+                                  + "\(Format.windowName(entry.sample.windowMinutes))",
+                           value: Format.percent(entry.sample.pct))
+            }
+        }
+    }
+
+    private struct NearestSample: Identifiable {
+        var id: String
+        var sample: LimitSample
+    }
+
+    /// The reading closest to the pointer for each (app, window), and only when
+    /// it is close enough in time to be describing the same moment.
+    private func nearestSamples(to date: Date) -> [NearestSample] {
+        var best: [String: LimitSample] = [:]
+        for sample in limits {
+            let key = "\(sample.app.rawValue)|\(sample.windowMinutes)"
+            let distance = abs(sample.ts.timeIntervalSince(date))
+            guard distance < 1_800 else { continue }
+            if let current = best[key], abs(current.ts.timeIntervalSince(date)) <= distance { continue }
+            best[key] = sample
+        }
+        return best.keys.sorted().compactMap { key in
+            best[key].map { NearestSample(id: key, sample: $0) }
         }
     }
 

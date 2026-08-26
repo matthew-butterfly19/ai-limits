@@ -68,6 +68,7 @@ extension Data {
 enum Marker {
     static let usage      = Array(#""usage""#.utf8)
     static let aiTitle    = Array(#""ai-title""#.utf8)
+    static let customTitle = Array(#""custom-title""#.utf8)
     static let tokenCount = Array(#""token_count""#.utf8)
     static let sessionMeta = Array(#""session_meta""#.utf8)
     static let threadGoal = Array(#""thread_goal_updated""#.utf8)

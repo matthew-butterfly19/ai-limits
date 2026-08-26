@@ -50,6 +50,10 @@ enum Palette {
         }
     }
 
+    /// Opaque panel background. The menu bar popover is translucent by
+    /// default, and anything bright behind it bleeds through the text.
+    static var surface: Color { Color(nsColor: .windowBackgroundColor) }
+
     static let gridline = adaptive(light: "#e1e0d9", dark: "#2c2c2a")
 
     /// Secondary text. The reference palette also carries a "muted" step

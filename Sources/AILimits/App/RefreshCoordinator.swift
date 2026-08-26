@@ -15,7 +15,9 @@ struct RefreshCoordinator {
         var ingestedFiles = 0
     }
 
-    func run() async -> Result {
+    /// With `fetchLimits` false the vendors are left alone and only the local
+    /// logs are read — which is all a screen tick needs.
+    func run(fetchLimits: Bool = true) async -> Result {
         var result = Result()
 
         do {
@@ -24,6 +26,8 @@ struct RefreshCoordinator {
         } catch {
             result.errors[.claude] = "ingest: \(error)"
         }
+
+        guard fetchLimits else { return result }
 
         // Both vendors are polled concurrently — the Codex call spawns a
         // process and takes about half a second on its own.

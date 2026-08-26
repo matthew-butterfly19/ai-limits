@@ -27,6 +27,7 @@ struct PopoverView: View {
             footer
         }
         .frame(width: 460)
+        .background(Palette.surface)
     }
 
     private var footer: some View {
@@ -54,7 +55,7 @@ struct PopoverView: View {
             Button("Szczegóły…") { openWindow(id: DetailWindow.identifier) }
                 .font(.system(size: 12))
             Button {
-                Task { await model.refresh() }
+                Task { await model.refresh(force: true) }
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
@@ -104,11 +105,22 @@ struct AppSection: View {
             Text(app.display).font(.system(size: 14, weight: .semibold))
             if let plan = snapshot?.planName { Chip(text: plan) }
             Spacer()
-            if snapshot?.isStale == true {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.warning)
-                    .help(snapshot?.staleReason ?? "dane z cache")
+            // An unlabelled icon says nothing. If the numbers are old, say so
+            // and say how old.
+            if snapshot?.isStale == true, let takenAt = snapshot?.takenAt {
+                HStack(spacing: 4) {
+                    Image(systemName: "clock.arrow.circlepath").font(.system(size: 11))
+                    Text("sprzed \(Format.timeLeft(-takenAt.timeIntervalSinceNow))")
+                        .font(.system(size: 11))
+                }
+                .foregroundStyle(Palette.warning)
+                .help("""
+                      Te liczby pochodzą z ostatniego udanego odczytu \
+                      (\(Format.when(takenAt))), bo bieżący się nie powiódł.
+                      \(snapshot?.staleReason ?? "")
+                      Czas do resetu i tak leci dalej — liczy się z godziny resetu, \
+                      nie z zapamiętanego odliczania.
+                      """)
             }
         }
     }
@@ -165,7 +177,7 @@ struct AppSection: View {
                 }
             }
             ForEach(threads.prefix(4)) { row in
-                ThreadLine(row: row, color: Palette.color(for: app))
+                ThreadLine(row: row)
             }
             if threads.count > 4 {
                 Button("jeszcze \(threads.count - 4) — pokaż wszystkie") {
@@ -214,22 +226,17 @@ struct AppSection: View {
 /// One thread, priced in percent of the limit window.
 struct ThreadLine: View {
     var row: StatsEngine.ThreadRow
-    var color: Color
 
     var body: some View {
         HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(row.thread.displayTitle)
-                    .font(.system(size: 12))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                GeometryReader { geometry in
-                    RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(color)
-                        .frame(width: max(2, geometry.size.width * CGFloat(min(max(row.share, 0), 1))))
-                }
-                .frame(height: 3)
-            }
+            // No proportional bar here: sitting directly under the title it
+            // read as a link underline, and the percentage beside it already
+            // carries the magnitude.
+            Text(row.thread.displayTitle)
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
             if let percent = row.limitPercent {
                 Text(percent >= 1 ? "\(Int(percent.rounded()))%"
                                   : "\(Format.decimal(percent))%")

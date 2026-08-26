@@ -40,6 +40,7 @@ struct ClaudeIngest {
                 guard line.contains(ascii: Marker.usage)
                         || line.contains(ascii: Marker.aiTitle)
                         || line.contains(ascii: Marker.compactBoundary)
+                        || line.contains(ascii: Marker.customTitle)
                 else { return }
                 guard let root = (try? JSONSerialization.jsonObject(with: line)) as? JSONObject
                 else { return }
@@ -63,6 +64,12 @@ struct ClaudeIngest {
                     return
                 }
 
+                // `/rename` writes this; the generated title is a separate record.
+                if kind == "custom-title" {
+                    sessions.note(app: .claude, sessionID: sessionID,
+                                  title: root.string("customTitle"), titleIsCustom: true)
+                    return
+                }
                 if kind == "ai-title" {
                     sessions.note(app: .claude, sessionID: sessionID, title: root.string("aiTitle"))
                     return

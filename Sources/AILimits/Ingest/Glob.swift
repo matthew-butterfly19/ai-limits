@@ -36,12 +36,17 @@ struct SessionAccumulator {
     private var pending: [String: SessionInfo] = [:]
 
     mutating func note(app: AppKind, sessionID: String,
-                       title: String? = nil, cwd: String? = nil,
-                       origin: String? = nil, ts: Date? = nil) {
+                       title: String? = nil, titleIsCustom: Bool = false,
+                       cwd: String? = nil, origin: String? = nil, ts: Date? = nil) {
         var info = pending[sessionID] ?? SessionInfo(app: app, sessionID: sessionID,
                                                      title: nil, cwd: nil, origin: nil,
                                                      firstTS: nil, lastTS: nil)
-        if let title { info.title = title }
+        // A name the user typed outranks a generated one no matter which
+        // record came later in the file.
+        if let title, titleIsCustom || !info.titleIsCustom {
+            info.title = title
+            info.titleIsCustom = info.titleIsCustom || titleIsCustom
+        }
         if let cwd { info.cwd = cwd }
         if let origin { info.origin = origin }
         if let ts {

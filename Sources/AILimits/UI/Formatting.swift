@@ -108,6 +108,15 @@ enum Format {
     static let dayNames = ["poniedziałek", "wtorek", "środa", "czwartek",
                            "piątek", "sobota", "niedziela"]
 
+    /// "Wtorek, 26.08"
+    static func dayDate(_ date: Date) -> String {
+        let index = (Calendar.current.component(.weekday, from: date) + 5) % 7
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "pl_PL")
+        formatter.dateFormat = "dd.MM"
+        return "\(dayNames[index].capitalized), \(formatter.string(from: date))"
+    }
+
     /// Short weekday name, e.g. "wt".
     static func weekday(_ date: Date) -> String {
         let index = (Calendar.current.component(.weekday, from: date) + 5) % 7

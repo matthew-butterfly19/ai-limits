@@ -8,7 +8,11 @@ struct AILimitsApp: App {
         MenuBarExtra {
             PopoverView().environmentObject(model)
         } label: {
-            Text(model.menuBarTitle).monospacedDigit()
+            // 11 pt rather than the menu bar default: the agreed lever for a
+            // line that does not fit is type size, not dropping content.
+            Text(model.menuBarTitle)
+                .font(.system(size: 11))
+                .monospacedDigit()
         }
         .menuBarExtraStyle(.window)
 

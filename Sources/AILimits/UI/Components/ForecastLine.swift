@@ -13,14 +13,13 @@ struct ForecastLine: View {
             Image(systemName: icon)
                 .font(.system(size: 11))
                 .foregroundStyle(color)
+            // One short sentence. The pace-against-budget arithmetic is
+            // reference material and lives in the tooltip — squeezed onto this
+            // row it truncated both halves and said nothing.
             Text(headline)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(color)
-            if let detail {
-                Text("· \(detail)")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.muted)
-            }
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .help(tooltip)
@@ -58,21 +57,17 @@ struct ForecastLine: View {
             return "zabraknie za \(Format.timeLeft(toExhaustion))"
                 + " — \(Format.timeLeft(margin)) przed resetem"
         case .tight:
-            return "starczy na styk — na koniec ≈\(percent(forecast.projectedEndPct))"
+            return "na styk — na koniec ≈\(percent(forecast.projectedEndPct))\(spare)"
         case .comfortable:
-            return "starczy — na koniec ≈\(percent(forecast.projectedEndPct))"
+            return "starczy — na koniec ≈\(percent(forecast.projectedEndPct))\(spare)"
         }
     }
 
-    private var detail: String? {
-        var parts: [String] = []
-        if let pace = forecast.pace {
-            parts.append("tempo \(rate(pace)) %/h przy budżecie \(rate(forecast.allowedPace)) %/h")
-        }
-        if let tokens = forecast.tokensLeft, forecast.verdict != .short {
-            parts.append("zapas ~\(Format.tokens(tokens))")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    /// Only when it fits in a couple of words — the full arithmetic is in the
+    /// tooltip.
+    private var spare: String {
+        guard let tokens = forecast.tokensLeft, forecast.verdict != .short else { return "" }
+        return ", zapas ~\(Format.tokens(tokens))"
     }
 
     private var tooltip: String {
