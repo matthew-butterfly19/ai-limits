@@ -71,7 +71,7 @@ struct BarRow: View {
                 Text(Format.tokens(value))
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Palette.muted)
             }
             GeometryReader { geometry in
                 RoundedRectangle(cornerRadius: 2, style: .continuous)

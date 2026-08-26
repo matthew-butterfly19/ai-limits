@@ -51,7 +51,12 @@ enum Palette {
     }
 
     static let gridline = adaptive(light: "#e1e0d9", dark: "#2c2c2a")
-    static let muted    = adaptive(light: "#898781", dark: "#898781")
+
+    /// Secondary text. The reference palette also carries a "muted" step
+    /// (`#898781`, identical in both modes) meant for axis furniture — used for
+    /// actual copy it disappears into a dark surface, which is exactly what
+    /// happened. Secondary ink steps with the mode and stays readable on both.
+    static let muted = adaptive(light: "#52514e", dark: "#c3c2b7")
 }
 
 /// Maps a model identifier to a fixed palette slot.

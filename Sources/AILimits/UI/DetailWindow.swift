@@ -365,7 +365,7 @@ struct DetailWindow: View {
                     Text(Format.model(entry.model)).font(.system(size: 12))
                         .frame(width: 140, alignment: .leading)
                     Text(Format.tokensFull(entry.totals.total))
-                        .font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
+                        .font(.system(size: 12)).monospacedDigit().foregroundStyle(Palette.muted)
                     Spacer()
                 }
             }
