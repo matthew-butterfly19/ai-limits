@@ -1,0 +1,21 @@
+# Build
+.build/
+.swiftpm/
+*.o
+*.dSYM/
+dist/
+AILimits.app/
+
+# Python prototype
+__pycache__/
+*.pyc
+
+# Never commit user data
+*.db
+*.db-wal
+*.db-shm
+*.html
+!docs/*.html
+
+# macOS
+.DS_Store

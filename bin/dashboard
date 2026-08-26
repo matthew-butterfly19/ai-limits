@@ -1,0 +1,4 @@
+#!/bin/bash
+# Generuje dashboard i otwiera go w przeglądarce.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec /usr/bin/python3 -c "import sys; sys.path.insert(0, '$ROOT'); from ailimits.cli import main; main(['dashboard', '--open'])"
