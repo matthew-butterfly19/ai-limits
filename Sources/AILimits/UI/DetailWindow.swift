@@ -29,6 +29,7 @@ struct DetailWindow: View {
     @State private var limits: [LimitSample] = []
     @State private var projects: [StatsEngine.ProjectShare] = []
     @State private var models: [ModelEfficiency] = []
+    @State private var weekDays: [StatsEngine.DayComparison] = []
     @State private var tokensPerPercent: [AppKind: Double] = [:]
     @State private var expanded: Set<String> = []
 
@@ -39,6 +40,7 @@ struct DetailWindow: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     hourlyChart
+                    weekChart
                     limitChart
                     modelTable
                     projectList
@@ -87,6 +89,52 @@ struct DetailWindow: View {
                 }
             } }
             .frame(height: 190)
+        }
+    }
+
+    /// Bars are this week, the tick is the same weekday a week ago.
+    ///
+    /// A benchmark marker rather than a second set of bars: the two week series
+    /// would need their own colours, and those are already spoken for by the
+    /// two apps.
+    private var weekChart: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Tydzień do tygodnia").font(.system(size: 14, weight: .semibold))
+            Chart {
+                ForEach(weekDays) { day in
+                    ForEach(AppKind.allCases, id: \.self) { app in
+                        if let tokens = day.byApp[app], tokens > 0 {
+                            BarMark(x: .value("Dzień", day.day, unit: .day),
+                                    y: .value("Tokeny", tokens))
+                            .foregroundStyle(by: .value("Aplikacja", app.display))
+                            .cornerRadius(3)
+                        }
+                    }
+                    if day.previousTotal > 0 {
+                        // A flat tick across the bar, not a rule: RuleMark with
+                        // both x and y collapses to a point.
+                        RectangleMark(x: .value("Dzień", day.day, unit: .day),
+                                      y: .value("Tydzień wcześniej", day.previousTotal),
+                                      width: .ratio(0.85), height: .fixed(2))
+                        .foregroundStyle(Palette.muted)
+                    }
+                }
+            }
+            .chartForegroundStyleScale(appScale)
+            .chartXAxis { AxisMarks(values: .stride(by: .day)) { value in
+                AxisValueLabel {
+                    if let date = value.as(Date.self) { Text(Format.weekday(date)) }
+                }
+            } }
+            .chartYAxis { AxisMarks { value in
+                AxisGridLine().foregroundStyle(Palette.gridline)
+                AxisValueLabel {
+                    if let count = value.as(Int.self) { Text(Format.tokens(count)) }
+                }
+            } }
+            .frame(height: 190)
+            Text("słupki — ten tydzień, pozioma kreska — ten sam dzień tygodnia siedem dni wcześniej")
+                .font(.system(size: 11)).foregroundStyle(Palette.muted)
         }
     }
 
@@ -343,6 +391,7 @@ struct DetailWindow: View {
         projects = (try? stats.projectShares(since: since)) ?? []
         hours = (try? stats.hourly(hours: period == .week ? 168 : 24)) ?? []
         models = (try? stats.modelEfficiency(since: since)) ?? []
+        weekDays = (try? stats.weekComparison()) ?? []
         var perPercent: [AppKind: Double] = [:]
         for app in AppKind.allCases {
             perPercent[app] = (try? stats.forecast(app: app, snapshot: model.snapshots[app],

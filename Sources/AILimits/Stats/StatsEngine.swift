@@ -179,6 +179,40 @@ struct StatsEngine {
                             previousPercent: tokensPerPercent.map { Double(previous) / $0 })
     }
 
+    /// One day of the current week beside the same weekday a week earlier.
+    struct DayComparison: Identifiable {
+        var day: Date
+        var byApp: [AppKind: Int]
+        var previousTotal: Int
+        var id: TimeInterval { day.timeIntervalSince1970 }
+        var total: Int { byApp.values.reduce(0, +) }
+    }
+
+    /// The last `days` days, each paired with its counterpart a week earlier.
+    ///
+    /// Aligned by weekday rather than by offset, because a Tuesday compares to
+    /// a Tuesday — weekends are not interchangeable with working days.
+    func weekComparison(days: Int = 7, now: Date = Date()) throws -> [DayComparison] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let today = calendar.startOfDay(for: now)
+        let week: TimeInterval = 7 * 86_400
+
+        var rows: [DayComparison] = []
+        for offset in stride(from: days - 1, through: 0, by: -1) {
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: today),
+                  let next = calendar.date(byAdding: .day, value: 1, to: day) else { continue }
+            let current = try store.totals(since: day, until: next)
+            let previous = try store.totals(since: day.addingTimeInterval(-week),
+                                            until: next.addingTimeInterval(-week))
+            rows.append(DayComparison(
+                day: day,
+                byApp: current.mapValues { $0.total },
+                previousTotal: previous.values.reduce(0) { $0 + $1.total }))
+        }
+        return rows
+    }
+
     /// Today against the mean of the preceding `days` days, per app.
     struct Comparison {
         var today: Int

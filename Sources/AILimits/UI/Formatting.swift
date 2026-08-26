@@ -108,6 +108,12 @@ enum Format {
     static let dayNames = ["poniedziałek", "wtorek", "środa", "czwartek",
                            "piątek", "sobota", "niedziela"]
 
+    /// Short weekday name, e.g. "wt".
+    static func weekday(_ date: Date) -> String {
+        let index = (Calendar.current.component(.weekday, from: date) + 5) % 7
+        return ["pn", "wt", "śr", "cz", "pt", "sb", "nd"][index]
+    }
+
     /// "Wtorek 15:00" — DateFormatter with the C locale would render English.
     static func dayHour(_ date: Date) -> String {
         let weekday = Calendar.current.component(.weekday, from: date)   // 1 = Sunday
