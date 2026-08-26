@@ -1,0 +1,98 @@
+import Foundation
+
+/// The two products whose usage this app tracks. Raw values are the `app`
+/// column already written by the Python collector — do not rename them.
+enum AppKind: String, CaseIterable, Sendable {
+    case claude
+    case codex
+
+    /// Name as it appears in the menu bar. The user rejected abbreviations.
+    var display: String {
+        switch self {
+        case .claude: return "ClaudeCode"
+        case .codex:  return "Codex"
+        }
+    }
+}
+
+/// One billed API response. `uniq` is the app-specific dedup key:
+/// Claude `<message.id>:<requestId>`, Codex `<session_id>:<ordinal>`.
+struct UsageEvent: Sendable {
+    var app: AppKind
+    var uniq: String
+    var sessionID: String
+    var ts: Date
+    var model: String?
+    var input: Int
+    var output: Int
+    var cacheRead: Int
+    var cacheWrite: Int
+    var reasoning: Int
+    /// Claude subagent transcript — the tokens are real, but they also roll up
+    /// into the parent session, so the UI can separate them.
+    var sidechain: Bool
+
+    var total: Int { input + output + cacheRead + cacheWrite }
+    /// Total minus cache reads: the headline's second number. Cache reads are
+    /// ~97% of raw volume and are not proportional to limit burn.
+    var billable: Int { input + output + cacheWrite }
+}
+
+struct SessionInfo: Sendable {
+    var app: AppKind
+    var sessionID: String
+    var title: String?
+    var cwd: String?
+    /// Free-form provenance string ("cli", "vscode", …) as found in the log.
+    var origin: String?
+    var firstTS: Date?
+    var lastTS: Date?
+
+    /// Last path component of `cwd` — what the UI shows as the project.
+    var project: String? {
+        guard let cwd, !cwd.isEmpty else { return nil }
+        return (cwd as NSString).lastPathComponent
+    }
+}
+
+/// One reading of a rate-limit window, as reported by the vendor.
+struct LimitSample: Sendable {
+    var ts: Date
+    var app: AppKind
+    var windowMinutes: Int
+    var pct: Double
+    var resetsAt: Date?
+}
+
+/// Everything one provider knows right now.
+struct LimitsSnapshot: Sendable {
+    var app: AppKind
+    var takenAt: Date
+    var windows: [LimitWindow]
+    var planName: String?
+    /// Set when the snapshot came from cache because the live fetch failed.
+    var staleReason: String?
+
+    var isStale: Bool { staleReason != nil }
+}
+
+struct LimitWindow: Sendable, Identifiable {
+    var minutes: Int
+    var pct: Double
+    var resetsAt: Date?
+
+    var id: Int { minutes }
+
+    /// Recomputed from `resetsAt` on every read, never a stored countdown —
+    /// a cached snapshot must keep counting down correctly.
+    func timeLeft(now: Date = Date()) -> TimeInterval? {
+        guard let resetsAt else { return nil }
+        return max(0, resetsAt.timeIntervalSince(now))
+    }
+
+    /// Start of the window this percentage describes.
+    func windowStart(now: Date = Date()) -> Date {
+        let end = resetsAt ?? now
+        return end.addingTimeInterval(-Double(minutes) * 60)
+    }
+}
