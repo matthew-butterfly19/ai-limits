@@ -22,6 +22,13 @@ struct AILimitsApp: App {
                 .onAppear { NSApp.activate(ignoringOtherApps: true) }
         }
         .defaultSize(width: 900, height: 680)
+
+        Window("Ustawienia — OpenRouter", id: SettingsWindow.identifier) {
+            SettingsWindow()
+                .environmentObject(model)
+                .onAppear { NSApp.activate(ignoringOtherApps: true) }
+        }
+        .defaultSize(width: 500, height: 380)
     }
 }
 

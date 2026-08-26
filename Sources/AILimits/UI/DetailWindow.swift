@@ -32,6 +32,8 @@ struct DetailWindow: View {
     @State private var models: [ModelEfficiency] = []
     @State private var weekDays: [StatsEngine.DayComparison] = []
     @State private var tokensPerPercent: [AppKind: Double] = [:]
+    @State private var dshToday: TokenTotals?
+    @State private var dshThreadsToday = 0
     @State private var expanded: Set<String> = []
     @State private var hourHover: HoverPoint?
     @State private var weekHover: HoverPoint?
@@ -46,8 +48,14 @@ struct DetailWindow: View {
             ScrollViewReader { scroll in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
+                        // A stable anchor rather than pinning the id to the
+                        // first real section — that section is conditional
+                        // (the Harness card only shows with a key set), and a
+                        // moving anchor is what caused charts to open under
+                        // the fold in the first place.
+                        Color.clear.frame(height: 0).id(Self.topAnchor)
+                        if model.openRouterKeyConfigured { harnessCard }
                         hourlyChart
-                            .id(Self.topAnchor)
                         weekChart
                         limitChart
                         modelTable
@@ -81,6 +89,32 @@ struct DetailWindow: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
+    }
+
+    // MARK: - Harness / OpenRouter
+
+    /// Dziś jest lokalne (tokeny z logów, od północy czasu lokalnego) obok
+    /// realnego dziś z OpenRoutera (`usage_daily`, dzień UTC) — dwa zegary,
+    /// więc oba podpisane, żeby nikt nie szukał rozbieżności, której nie ma.
+    private var harnessCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Harness — OpenRouter").font(.system(size: 14, weight: .semibold))
+            HStack(spacing: 24) {
+                stat("dziś (OpenRouter)", model.openRouterTodayUsage.map { moneyText($0) } ?? "—")
+                stat("dziś tokenów", dshToday.map { Format.tokens($0.total) } ?? "—")
+                stat("wątków dziś", dshThreadsToday > 0 ? "\(dshThreadsToday)" : "—")
+                stat("łącznie na kluczu", model.openRouterKeyTotalUsage.map { moneyText($0) } ?? "—")
+            }
+            if let error = model.openRouterError {
+                Text(error).font(.system(size: 11)).foregroundStyle(Palette.serious)
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.gridline.opacity(0.4)))
+    }
+
+    private func moneyText(_ amount: Double) -> String {
+        amount < 0.01 ? "<0.01 $" : "\(Format.decimal(amount, places: 2)) $"
     }
 
     // MARK: - charts
@@ -322,6 +356,8 @@ struct DetailWindow: View {
     ///
     /// Everything here is measured, nothing is priced: on a subscription the
     /// cost is limit percent, and only some windows are metered per model.
+    /// Dla dsh (Harnessa) koszt jest realny z OpenRoutera — pokazujemy go
+    /// zamiast % limitu / Mtok.
     private var modelTable: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
@@ -359,15 +395,30 @@ struct DetailWindow: View {
                     cell(share(row.cacheHitRate), width: 55)
                     cell(share(row.reasoningShare), width: 65)
                     cell("\(row.totals.events)", width: 55)
-                    cell(row.limitPerMillion.map { Format.decimal($0, places: 2) } ?? "—", width: 100)
+                    cell(costCell(row), width: 100)
                 }
                 .help(tooltip(for: row))
             }
-            Text("Kolumna „% limitu / Mtok” wypełnia się tylko dla modeli, którym dostawca "
-                 + "liczy osobne okno — u reszty nie da się tego zmierzyć, "
-                 + "a zgadywać nie będziemy.")
+            Text("Ostatnia kolumna: dla Harnessa realny koszt USD z OpenRoutera (suma w widocznym "
+                 + "okresie, pomiar ze strony rozliczeń); dla pozostałych % okna tygodniowego na "
+                 + "milion tokenów, jeśli dostawca liczy osobne okno — u reszty nie da się tego "
+                 + "zmierzyć, a zgadywać nie będziemy.")
                 .font(.system(size: 12)).foregroundStyle(Palette.muted)
         }
+    }
+
+    private func costCell(_ row: ModelEfficiency) -> String {
+        if row.app == .dsh {
+            if !model.openRouterKeyConfigured {
+                return "—"
+            }
+            if let cost = row.openRouterCost ?? model.costForModel(row.model, since: period.start(model: model)) {
+                return cost < 0.01 ? "<0.01$" : Format.decimal(cost, places: 2) + "$"
+            }
+            return "—"
+        }
+        // Dla Claude/Codex — stara kolumna % limitu / Mtok
+        return row.limitPerMillion.map { Format.decimal($0, places: 2) } ?? "—"
     }
 
     private func head(_ text: String, _ width: CGFloat,
@@ -395,6 +446,18 @@ struct DetailWindow: View {
         if let cost = row.limitPerMillion {
             lines.append("\(Format.decimal(cost, places: 2)) % okna tygodniowego na milion "
                          + "tokenów (z \(row.limitSamples) odczytów)")
+        }
+        if row.app == .dsh {
+            let dbCost = row.openRouterCost
+                ?? model.costForModel(row.model, since: period.start(model: model))
+            if let cost = dbCost {
+                lines.append("koszt wg OpenRoutera: \(Format.decimal(cost, places: 2)) USD")
+            } else if model.openRouterKeyConfigured, model.openRouterSelectedHash != nil {
+                lines.append("brak danych o koszcie dla tego modelu — sprawdź czy pojawia się "
+                             + "w odpowiedzi /activity")
+            } else if !model.openRouterKeyConfigured {
+                lines.append("ustaw klucz OpenRoutera w Ustawieniach, by zobaczyć koszt")
+            }
         }
         return lines.joined(separator: "\n")
     }
@@ -498,7 +561,8 @@ struct DetailWindow: View {
         rows = (try? stats.threadRows(since: since, limit: 40)) ?? []
         projects = (try? stats.projectShares(since: since)) ?? []
         hours = (try? stats.hourly(hours: period == .week ? 168 : 24)) ?? []
-        models = (try? stats.modelEfficiency(since: since)) ?? []
+        models = (try? stats.modelEfficiency(since: since,
+                                     openRouterCosts: model.openRouterCosts(since: since))) ?? []
         weekDays = (try? stats.weekComparison()) ?? []
         var perPercent: [AppKind: Double] = [:]
         for app in AppKind.allCases {
@@ -508,5 +572,9 @@ struct DetailWindow: View {
         tokensPerPercent = perPercent
         limits = (try? model.store?.limitHistory(
             since: since ?? Date().addingTimeInterval(-7 * 86_400))) ?? []
+
+        let startOfDay = Calendar.current.startOfDay(for: Date())
+        dshToday = (try? model.store?.totals(since: startOfDay))?[.dsh]
+        dshThreadsToday = (try? model.store?.threads(since: startOfDay, app: .dsh))?.count ?? 0
     }
 }

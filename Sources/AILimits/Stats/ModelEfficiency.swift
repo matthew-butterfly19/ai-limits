@@ -32,12 +32,18 @@ struct ModelEfficiency: Identifiable {
     var limitPerMillion: Double?
     /// How many readings that estimate rests on.
     var limitSamples: Int = 0
+
+    /// Realny koszt USD z OpenRoutera za ten model w widocznym okresie.
+    /// Dotyczy tylko dsh — pozostałe rozliczają się przez subskrypcję.
+    var openRouterCost: Double?
 }
 
 extension StatsEngine {
 
     /// Per-model breakdown for a period, heaviest first.
+    /// `openRouterCosts` — koszty z /activity dla dsh (model → USD).
     func modelEfficiency(since: Date?, app: AppKind? = nil,
+                         openRouterCosts: [String: Double] = [:],
                          now: Date = Date()) throws -> [ModelEfficiency] {
         let scoped = try store.scopedHistory(since: since ?? now.addingTimeInterval(-30 * 86_400))
 
@@ -49,6 +55,11 @@ extension StatsEngine {
                    let cost = limitCost(model: model, tokens: entry.totals.total, scoped: scoped) {
                     row.limitPerMillion = cost.perMillion
                     row.limitSamples = cost.samples
+                }
+                if kind == .dsh, let model = entry.model {
+                    let orModel = OpenRouterAPI.openRouterModel(for: model,
+                                                                 seenModels: Set(openRouterCosts.keys))
+                    row.openRouterCost = orModel.flatMap { openRouterCosts[$0] }
                 }
                 rows.append(row)
             }

@@ -27,14 +27,89 @@ final class AppModel: ObservableObject {
     @Published private(set) var fatalError: String?
     @Published var isRefreshing = false
 
-    /// What the menu bar leads with. Persisted, because it is a preference.
-    @Published var titleMode: TitleMode = .compact {
+    // MARK: - OpenRouter (dsh koszty)
+
+    /// Czy management key jest zapisany w Keychainie.
+    @Published var openRouterKeyConfigured = false
+    /// Lista zwykłych kluczy API na koncie — użytkownik wybiera który to Harness.
+    @Published var openRouterKeys: [OpenRouterAPI.KeyInfo] = []
+    /// Hash wybranego klucza (filtrujemy activity po api_key_hash).
+    @Published var openRouterSelectedHash: String?
+    /// Surowe wiersze z /activity (ostatnie 30 dni). Koszt per model liczony
+    /// na żądanie dla widocznego okresu — patrz `openRouterCost(since:)`.
+    @Published private(set) var openRouterActivity: [OpenRouterAPI.ActivityRow] = []
+    /// Błąd z OpenRouter — pokazywany w widoku szczegółów.
+    @Published var openRouterError: String?
+    /// Kiedy ostatnio pobrano koszty (unikać zbędnych zapytań).
+    @Published var openRouterLastFetch: Date?
+    /// Kiedy ostatnio pobrano listę kluczy (a z nią `usageDaily`).
+    @Published var openRouterKeysLastFetch: Date?
+
+    private static let selectedHashKey = "openRouterSelectedKeyHash"
+    /// `/activity` wraca tylko zakończone dni UTC — ta historia zmienia się
+    /// raz dziennie, więc rzadki cache wystarcza.
+    static let openRouterCacheTTL: TimeInterval = 6 * 3600
+    /// `usage_daily` na `/keys` to licznik na żywo, nie eksport historii —
+    /// odświeżamy go w tym samym rytmie co okna limitu, żeby "dziś" nie stało
+    /// się nieaktualne w trakcie pracy.
+    static let openRouterKeysTTL: TimeInterval = limitsInterval
+
+    /// Czy minął czas od ostatniego pobrania kosztów — wolno spytać API.
+    var openRouterShouldRefresh: Bool {
+        guard openRouterKeyConfigured, openRouterSelectedHash != nil else { return false }
+        guard let last = openRouterLastFetch else { return true }
+        return Date().timeIntervalSince(last) >= Self.openRouterCacheTTL
+    }
+
+    var openRouterKeysShouldRefresh: Bool {
+        guard openRouterKeyConfigured else { return false }
+        guard let last = openRouterKeysLastFetch else { return true }
+        return Date().timeIntervalSince(last) >= Self.openRouterKeysTTL
+    }
+
+    /// Wydatek na kluczu Harnessa od początku dzisiejszego dnia — jedyna
+    /// liczba w tym oknie, której nie blokuje opóźnienie `/activity`.
+    var openRouterTodayUsage: Double? {
+        guard let hash = openRouterSelectedHash else { return nil }
+        return openRouterKeys.first { $0.hash == hash }?.usageDaily
+    }
+
+    /// Wydatek na kluczu Harnessa od jego stworzenia — nie tylko dziś.
+    var openRouterKeyTotalUsage: Double? {
+        guard let hash = openRouterSelectedHash else { return nil }
+        return openRouterKeys.first { $0.hash == hash }?.usage
+    }
+
+    /// What the menu bar leads with — four independent preferences, not one
+    /// combined mode. See `MenuBarTitle` for why that used to be one enum.
+    @Published var show5hInBar = true {
         didSet {
-            UserDefaults.standard.set(titleMode.rawValue, forKey: Self.titleModeKey)
+            UserDefaults.standard.set(show5hInBar, forKey: Self.show5hKey)
             rebuildTitle()
         }
     }
-    private static let titleModeKey = "menuBarMode"
+    @Published var show7dInBar = false {
+        didSet {
+            UserDefaults.standard.set(show7dInBar, forKey: Self.show7dKey)
+            rebuildTitle()
+        }
+    }
+    @Published var showForecastInBar = true {
+        didSet {
+            UserDefaults.standard.set(showForecastInBar, forKey: Self.showForecastKey)
+            rebuildTitle()
+        }
+    }
+    @Published var showTokensInBar = false {
+        didSet {
+            UserDefaults.standard.set(showTokensInBar, forKey: Self.showTokensKey)
+            rebuildTitle()
+        }
+    }
+    private static let show5hKey = "menuBarShow5h"
+    private static let show7dKey = "menuBarShow7d"
+    private static let showForecastKey = "menuBarShowForecast"
+    private static let showTokensKey = "menuBarShowTokens"
 
     /// Which apps get a segment in the menu bar line. Everything else about an
     /// app — the popover section, the detail window — stays visible regardless;
@@ -71,8 +146,24 @@ final class AppModel: ObservableObject {
         } catch {
             fatalError = "\(error)"
         }
-        titleMode = UserDefaults.standard.string(forKey: Self.titleModeKey)
-            .flatMap(TitleMode.init(rawValue:)) ?? .compact
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: Self.show5hKey) != nil {
+            show5hInBar = defaults.bool(forKey: Self.show5hKey)
+            show7dInBar = defaults.bool(forKey: Self.show7dKey)
+            showForecastInBar = defaults.bool(forKey: Self.showForecastKey)
+        } else if let allWindows = defaults.object(forKey: "menuBarShowAllWindows") as? Bool {
+            // One-time migration from the short-lived two-toggle version:
+            // 7 d followed "all windows", 5 h and the forecast were implicit.
+            show7dInBar = allWindows
+        } else if let old = defaults.string(forKey: "menuBarMode") {
+            // One-time migration from the original 4-case picker. "tokens"
+            // dropped the forecast back then — that was the bug being fixed,
+            // not a preference worth carrying forward.
+            show7dInBar = old != "compact"
+        }
+        if defaults.object(forKey: Self.showTokensKey) != nil {
+            showTokensInBar = defaults.bool(forKey: Self.showTokensKey)
+        }
         // No saved preference yet (fresh install, or upgrading from a build
         // before this existed) means "everything visible" — the checkbox
         // starts as a no-op, not as an unexplained app disappearing.
@@ -80,7 +171,10 @@ final class AppModel: ObservableObject {
             visibleApps = Set(saved.compactMap(AppKind.init(rawValue:)))
         }
         modelColors = ModelColors(models: (try? store?.distinctModels()) ?? [])
+        openRouterKeyConfigured = OpenRouterKeychain.read() != nil
+        openRouterSelectedHash = UserDefaults.standard.string(forKey: Self.selectedHashKey)
         loadCachedSnapshots()
+        loadCachedOpenRouterCosts()
         rebuildTitle()
     }
 
@@ -167,6 +261,15 @@ final class AppModel: ObservableObject {
 
         lastRefresh = Date()
         try? store.pruneLimits()
+        // Dsh nie ma okna limitu — zamiast tego odświeżamy koszty z OpenRoutera.
+        // Historia (/activity) rzadko, TTL 6h; `usage_daily` na kluczu w rytmie
+        // okien limitu, żeby "dziś" nie stało w miejscu przez pół dnia pracy.
+        if force || openRouterKeysShouldRefresh {
+            await refreshOpenRouterKeys(force: force)
+        }
+        if force || openRouterShouldRefresh {
+            await refreshOpenRouterCosts(force: force)
+        }
         rebuildTitle()
         if ProcessInfo.processInfo.environment["AILIMITS_TRACE"] != nil {
             let stale = snapshots.compactMapValues(\.staleReason)
@@ -185,9 +288,140 @@ final class AppModel: ObservableObject {
         return starts.min() ?? now.addingTimeInterval(-5 * 3_600)
     }
 
+    // MARK: - OpenRouter
+
+    /// Zapisuje management key, pobiera listę kluczy i koszty.
+    func saveOpenRouterKey(_ key: String) throws {
+        try OpenRouterKeychain.save(key)
+        openRouterKeyConfigured = true
+        openRouterError = nil
+        Task { await refreshOpenRouterKeys(force: true) }
+        Task { await refreshOpenRouterCosts(force: true) }
+    }
+
+    /// Usuwa management key i cały stan pochodny.
+    func deleteOpenRouterKey() throws {
+        try OpenRouterKeychain.delete()
+        openRouterKeyConfigured = false
+        openRouterKeys = []
+        openRouterSelectedHash = nil
+        UserDefaults.standard.removeObject(forKey: Self.selectedHashKey)
+        openRouterActivity = []
+        openRouterLastFetch = nil
+        openRouterError = nil
+        try? FileManager.default.removeItem(at: openRouterCacheURL)
+    }
+
+    /// Użytkownik wybrał, który klucz z listy to Harness.
+    func selectOpenRouterKey(hash: String) {
+        openRouterSelectedHash = hash
+        UserDefaults.standard.set(hash, forKey: Self.selectedHashKey)
+        Task { await refreshOpenRouterCosts(force: true) }
+    }
+
+    /// Pobiera listę kluczy API z OpenRoutera — przy okazji `usageDaily`,
+    /// jedyne źródło "ile dziś" (patrz `openRouterTodayUsage`).
+    func refreshOpenRouterKeys(force: Bool = false) async {
+        guard openRouterKeyConfigured else { return }
+        guard force || openRouterKeysShouldRefresh else { return }
+        guard let key = OpenRouterKeychain.read() else {
+            openRouterKeyConfigured = false
+            openRouterError = "klucz nie znaleziony w Keychainie"
+            return
+        }
+        do {
+            let keys = try await OpenRouterAPI.fetchKeys(managementKey: key)
+            openRouterKeys = keys
+            openRouterKeysLastFetch = Date()
+            openRouterError = nil
+            // `usage_daily` just arrived (or changed) — the bar shouldn't
+            // wait for the next periodic tick to show it.
+            rebuildTitle()
+        } catch {
+            openRouterError = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+        }
+    }
+
+    /// Pobiera koszty z /activity dla wybranego klucza.
+    ///
+    /// Brak klucza albo brak wyboru który to Harness nie jest błędem — to
+    /// funkcja opcjonalna, którą użytkownik jeszcze nie skonfigurował. Czerwony
+    /// `openRouterError` jest zarezerwowany dla prawdziwej awarii (odrzucony
+    /// klucz, sieć); "jeszcze nieskonfigurowane" ma zostać ciche, zgodnie z tym,
+    /// jak tabela modeli traktuje ten sam stan (myślnik, nie komunikat).
+    func refreshOpenRouterCosts(force: Bool = false) async {
+        guard openRouterKeyConfigured, let hash = openRouterSelectedHash else { return }
+        guard let key = OpenRouterKeychain.read() else {
+            openRouterKeyConfigured = false
+            openRouterError = "klucz nie znaleziony w Keychainie"
+            return
+        }
+        guard force || openRouterShouldRefresh else { return }
+
+        do {
+            let rows = try await OpenRouterAPI.fetchActivity(managementKey: key, apiKeyHash: hash)
+            openRouterActivity = rows
+            openRouterLastFetch = Date()
+            openRouterError = nil
+            saveCachedOpenRouterActivity()
+        } catch {
+            openRouterError = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+        }
+    }
+
+    /// Koszty per model dla okresu od `since` — to, co pokazuje tabela modeli.
+    func openRouterCosts(since: Date?) -> [String: Double] {
+        OpenRouterAPI.costs(rows: openRouterActivity, since: since)
+    }
+
+    /// Dopasowuje model z bazy i zwraca realny koszt z OpenRoutera (USD)
+    /// dla okresu od `since`. nil = brak dopasowania albo brak danych.
+    func costForModel(_ dbModel: String?, since: Date? = nil) -> Double? {
+        guard let dbModel else { return nil }
+        let costs = costsSince(since)
+        let orModel = OpenRouterAPI.openRouterModel(for: dbModel, seenModels: Set(costs.keys))
+        return orModel.flatMap { costs[$0] }
+    }
+
+    /// Koszty per model od `since`, z cache po stronie modelu, żeby nie liczyć
+    /// za każdym razem od zera przy każdym odświeżeniu tabeli.
+    private func costsSince(_ since: Date?) -> [String: Double] {
+        if let since, let cached = openRouterCostCache[since] { return cached }
+        let costs = openRouterCosts(since: since)
+        if let since { openRouterCostCache[since] = costs }
+        return costs
+    }
+
+    private var openRouterCostCache: [Date: [String: Double]] = [:]
+
+    // MARK: - OpenRouter cache
+
+    private var openRouterCacheURL: URL {
+        Store.dataDirectory.appendingPathComponent("openrouter-activity.json")
+    }
+
+    private func loadCachedOpenRouterCosts() {
+        guard let data = try? Data(contentsOf: openRouterCacheURL),
+              let rows = try? JSONDecoder().decode([OpenRouterAPI.ActivityRow].self, from: data)
+        else { return }
+        openRouterActivity = rows
+    }
+
+    private func saveCachedOpenRouterActivity() {
+        guard let data = try? JSONEncoder().encode(openRouterActivity) else { return }
+        try? FileManager.default.createDirectory(at: Store.dataDirectory,
+                                                  withIntermediateDirectories: true)
+        try? data.write(to: openRouterCacheURL, options: .atomic)
+    }
+
     private func rebuildTitle() {
+        var todayUsage: [AppKind: Double] = [:]
+        if let today = openRouterTodayUsage { todayUsage[.dsh] = today }
         menuBarTitle = MenuBarTitle.render(snapshots: snapshots, totals: windowTotals,
-                                           forecasts: forecasts, mode: titleMode,
+                                           forecasts: forecasts, todayUsage: todayUsage,
+                                           show5h: show5hInBar, show7d: show7dInBar,
+                                           showForecast: showForecastInBar,
+                                           showTokens: showTokensInBar,
                                            visibleApps: visibleApps)
     }
 }

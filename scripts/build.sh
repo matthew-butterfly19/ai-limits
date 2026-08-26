@@ -62,6 +62,13 @@ xcrun swiftc ${VFS_ARGS[@]+"${VFS_ARGS[@]}"} "${FLAGS[@]}" \
   -o "$APP/Contents/MacOS/AILimits" "${SOURCES[@]}"
 
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
-codesign --force --sign - "$APP" >/dev/null
+# Plain `--sign -` gives an ad-hoc signature whose designated requirement is
+# `cdhash H"…"` — a hash of this exact binary. Every rebuild produces a new
+# one, so Keychain treats each build as a different app and asks again for
+# access to items an earlier build created (the OpenRouter key, e.g.). Pinning
+# the requirement to the bundle identifier instead keeps it stable across
+# rebuilds without needing a real signing certificate.
+codesign --force --sign - --identifier "dev.ailimits.AILimits" \
+  --requirements '=designated => identifier "dev.ailimits.AILimits"' "$APP" >/dev/null
 
 echo "built $APP"

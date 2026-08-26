@@ -8,6 +8,7 @@ import SwiftUI
 struct PopoverView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.openWindow) private var openWindow
+    @State private var showBarSettings = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -26,7 +27,7 @@ struct PopoverView: View {
             Divider()
             footer
         }
-        .frame(width: 460)
+        .frame(width: 520)
         .background(Palette.surface)
     }
 
@@ -39,26 +40,19 @@ struct PopoverView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Palette.muted)
             Spacer()
-            Menu {
-                Picker("W pasku menu", selection: $model.titleMode) {
-                    ForEach(TitleMode.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.inline)
-                Divider()
-                Text("Widoczne w pasku menu")
-                ForEach(AppKind.allCases, id: \.self) { app in
-                    Toggle(app.display, isOn: visibleBinding(for: app))
-                }
-            } label: {
+            Button { showBarSettings = true } label: {
                 Image(systemName: "gearshape")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
+            .buttonStyle(.borderless)
             .frame(width: 24)
             .help("Co pokazywać w pasku menu")
+            .popover(isPresented: $showBarSettings, arrowEdge: .bottom) { barSettings }
 
             Button("Szczegóły…") { openWindow(id: DetailWindow.identifier) }
                 .font(.system(size: 12))
+            Button("OpenRouter…") { openWindow(id: SettingsWindow.identifier) }
+                .font(.system(size: 12))
+                .help("Klucz OpenRoutera — realny koszt Harnessa")
             Button {
                 Task { await model.refresh(force: true) }
             } label: {
@@ -74,6 +68,29 @@ struct PopoverView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    /// A plain `Toggle` list in a `.popover`, not a `Menu` — a `Menu` closes
+    /// itself the instant any item inside it is tapped, which makes checking
+    /// several boxes in a row impossible. This stays open until clicked away.
+    private var barSettings: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("W pasku menu").font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.muted)
+            Toggle("Okno 5 h", isOn: $model.show5hInBar)
+            Toggle("Okno 7 d", isOn: $model.show7dInBar)
+            Toggle("Prognoza", isOn: $model.showForecastInBar)
+            Toggle("Tokeny", isOn: $model.showTokensInBar)
+                .help("Harness pokazuje tokeny zawsze — rozlicza się nimi wprost przez OpenRouter, więc ta zgoda go nie dotyczy.")
+            Divider()
+            Text("Widoczne w pasku menu").font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.muted)
+            ForEach(AppKind.allCases, id: \.self) { app in
+                Toggle(app.display, isOn: visibleBinding(for: app))
+            }
+        }
+        .toggleStyle(.checkbox)
+        .font(.system(size: 12))
+        .padding(14)
+        .frame(width: 200)
     }
 
     private func visibleBinding(for app: AppKind) -> Binding<Bool> {
@@ -102,6 +119,11 @@ struct AppSection: View {
             header
             if let error = model.errors[app] {
                 Label(error, systemImage: "exclamationmark.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.serious)
+            }
+            if app == .dsh, let orError = model.openRouterError {
+                Label(orError, systemImage: "exclamationmark.circle")
                     .font(.system(size: 11))
                     .foregroundStyle(Palette.serious)
             }
@@ -141,7 +163,9 @@ struct AppSection: View {
 
     @ViewBuilder private var windows: some View {
         let sorted = (snapshot?.windows ?? []).sorted { $0.minutes < $1.minutes }
-        if sorted.isEmpty {
+        if app == .dsh {
+            dshToday
+        } else if sorted.isEmpty {
             Text("brak danych o limitach").font(.system(size: 12)).foregroundStyle(Palette.muted)
         } else {
             VStack(alignment: .leading, spacing: 12) {
@@ -169,6 +193,34 @@ struct AppSection: View {
                     }
                 }
             }
+        }
+    }
+
+    /// Dsh nie ma okna limitu, więc zamiast paska % pokazujemy jedyną liczbę,
+    /// której nie blokuje opóźnienie `/activity`: `usage_daily` z `/keys`,
+    /// realny licznik wydatku od początku dnia, prosto z OpenRoutera.
+    @ViewBuilder private var dshToday: some View {
+        if model.openRouterTodayUsage != nil || model.openRouterKeyTotalUsage != nil {
+            HStack(spacing: 18) {
+                moneyStat("dziś", model.openRouterTodayUsage)
+                moneyStat("łącznie na kluczu", model.openRouterKeyTotalUsage)
+            }
+            .help("""
+                  "Dziś" to wydatek klucza Harnessa od początku dnia (usage_daily), \
+                  "łącznie" — od stworzenia klucza (usage). Oba prosto z OpenRoutera, \
+                  nie z lokalnych logów.
+                  """)
+        } else {
+            Text("brak danych o limitach").font(.system(size: 12)).foregroundStyle(Palette.muted)
+        }
+    }
+
+    private func moneyStat(_ label: String, _ amount: Double?) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.muted)
+            Text(amount.map { $0 < 0.01 ? "<0.01 $" : "\(Format.decimal($0, places: 2)) $" } ?? "—")
+                .font(.system(size: 17, weight: .semibold))
+                .monospacedDigit()
         }
     }
 
