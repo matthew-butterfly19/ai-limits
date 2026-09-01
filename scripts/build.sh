@@ -62,13 +62,25 @@ xcrun swiftc ${VFS_ARGS[@]+"${VFS_ARGS[@]}"} "${FLAGS[@]}" \
   -o "$APP/Contents/MacOS/AILimits" "${SOURCES[@]}"
 
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
-# Plain `--sign -` gives an ad-hoc signature whose designated requirement is
-# `cdhash H"…"` — a hash of this exact binary. Every rebuild produces a new
-# one, so Keychain treats each build as a different app and asks again for
-# access to items an earlier build created (the OpenRouter key, e.g.). Pinning
-# the requirement to the bundle identifier instead keeps it stable across
-# rebuilds without needing a real signing certificate.
-codesign --force --sign - --identifier "dev.ailimits.AILimits" \
-  --requirements '=designated => identifier "dev.ailimits.AILimits"' "$APP" >/dev/null
+
+# Podpis ad-hoc (`--sign -`) ma wymaganie `cdhash H"…"` — odcisk dokładnie tego
+# pliku, inny po każdym buildzie. Keychain traktuje wtedy każdy build jak inną
+# aplikację i po każdej instalacji znowu pyta o hasło do klucza OpenRoutera.
+# Samo przypięcie wymagania do identyfikatora tego nie naprawia: przy podpisie
+# ad-hoc identyfikator nie jest niczym poświadczony, więc ACL Keychaina i tak
+# pyta ponownie. Dlatego, jeśli lokalna tożsamość istnieje
+# (`scripts/signing.sh` ją zakłada), podpisujemy nią — jej wymaganie
+# `identifier … and certificate leaf = H"…"` jest takie samo dla każdego
+# buildu, więc „Zawsze zezwalaj” klika się raz.
+IDENTITY="AI Limits Local Signing"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$IDENTITY"; then
+  codesign --force --sign "$IDENTITY" --identifier "dev.ailimits.AILimits" "$APP" >/dev/null
+  echo "note: podpisano tożsamością „${IDENTITY}”"
+else
+  codesign --force --sign - --identifier "dev.ailimits.AILimits" \
+    --requirements '=designated => identifier "dev.ailimits.AILimits"' "$APP" >/dev/null
+  echo "note: podpis ad-hoc — Keychain będzie pytał po każdej instalacji"
+  echo "      (./scripts/signing.sh zakłada stałą tożsamość i to kończy)"
+fi
 
 echo "built $APP"

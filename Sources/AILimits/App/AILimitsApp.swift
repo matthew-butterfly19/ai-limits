@@ -8,8 +8,11 @@ struct AILimitsApp: App {
         MenuBarExtra {
             PopoverView().environmentObject(model)
         } label: {
-            // 11 pt rather than the menu bar default: the agreed lever for a
-            // line that does not fit is type size, not dropping content.
+            // 11 pt rather than the menu bar default — the first lever for a
+            // line that does not fit. It is no longer the only one: macOS
+            // hides a status item that does not fit rather than truncating it,
+            // and 11 pt does not buy nearly enough room, so `MenuBarFit` also
+            // picks a shorter rung of `MenuBarTitle.variants` when it has to.
             Text(model.menuBarTitle)
                 .font(.system(size: 11))
                 .monospacedDigit()

@@ -18,6 +18,10 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   exit 0
 fi
 
+# Stała tożsamość podpisu, żeby Keychain nie pytał o hasło po każdej
+# instalacji — patrz komentarz w scripts/signing.sh.
+"$ROOT/scripts/signing.sh" >/dev/null || echo "uwaga: nie udało się założyć tożsamości podpisu"
+
 "$ROOT/scripts/build.sh" release
 
 # Stop whatever is running before replacing the bundle underneath it.

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Entry point. With no arguments the menu bar app starts; with `--…` the
@@ -51,6 +52,7 @@ enum CommandLineTool {
             case "models":  try modelsReport(store, since: options["since"])
             case "check":   try check(store)
             case "limits":  try limits(store)
+            case "menubar": try menuBar(store)
             case "help":    usage()
             default:
                 FileHandle.standardError.write(Data("nieznane polecenie: --\(command)\n".utf8))
@@ -73,6 +75,7 @@ enum CommandLineTool {
           --threads [--db PATH] [--since ISO] najcięższe wątki
           --models  [--db PATH] [--since ISO] co który model daje za co zużywa
           --limits                            odczytaj limity na żywo
+          --menubar                           drabina skrótów linii paska menu
           --check   [--db PATH]               co widzi okno szczegółów (diagnostyka)
           --compactions [--db PATH]           kompakty kontekstu i ich szacowany koszt
           --backfill    [--db PATH]           wyzeruj kursory i przejdź logi od nowa
@@ -191,6 +194,68 @@ enum CommandLineTool {
         }
     }
 
+    /// Everything the menu bar line is rendered from, gathered the same way
+    /// the app gathers it — so the diagnostics show the real line, not an
+    /// approximation of it.
+    private static func inputs(store: Store,
+                               snapshots: [AppKind: LimitsSnapshot]) -> MenuBarTitle.Inputs {
+        let stats = StatsEngine(store: store)
+        var forecasts: [AppKind: [Forecast]] = [:]
+        for app in AppKind.allCases {
+            forecasts[app] = (try? stats.forecasts(app: app, snapshot: snapshots[app])) ?? []
+        }
+        let totals = (try? store.totals(since: Date().addingTimeInterval(-5 * 3_600))) ?? [:]
+        return MenuBarTitle.Inputs(snapshots: snapshots, totals: totals, forecasts: forecasts)
+    }
+
+    /// Prints the whole ladder with the width of every rung, the way
+    /// `MenuBarFit` sees it. Answers "why is the bar showing the short line"
+    /// without guessing from a screenshot — the same job `--check` does for
+    /// the detail window.
+    ///
+    /// Run from a terminal there is no status item to measure, so the slot and
+    /// the budget stay unknown; the widths and the notch are real. For the live
+    /// numbers run the app itself with `AILIMITS_TRACE=1`.
+    private static func menuBar(_ store: Store) throws {
+        // The limits fetch has to finish before anything can be measured, and
+        // the measuring itself is main-actor work — so the wait happens first
+        // and the printing after it, never inside the task. A `MainActor.run`
+        // in there would deadlock against this very semaphore.
+        let collected = Box<[String]>([])
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            let result = await RefreshCoordinator(store: store).run()
+            let readings = inputs(store: store, snapshots: result.snapshots)
+            collected.value = MenuBarTitle.variants(readings, style: MenuBarDefaults.style())
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        MainActor.assumeIsolated {
+            let fit = MenuBarFit()
+            print(fit.diagnostics())
+            if let screen = NSScreen.main {
+                print(String(format: "ekran %.0f pt, po prawej od notcha: %@",
+                             screen.frame.width,
+                             screen.auxiliaryTopRightArea.map {
+                                 String(format: "%.0f…%.0f pt", $0.minX, $0.maxX)
+                             } ?? "brak notcha — lewej krawędzi nie da się zmierzyć"))
+            }
+            let budget = fit.budget()
+            for (index, variant) in collected.value.enumerated() {
+                let width = fit.width(of: variant)
+                let fits = budget.map { width <= $0 ? "✓" : "✗" } ?? " "
+                print(String(format: "%@ %d  %4.0f pt  %@", fits, index, width, variant))
+            }
+        }
+    }
+
+    /// Carries a value out of a detached task to the thread waiting on it.
+    private final class Box<Value>: @unchecked Sendable {
+        var value: Value
+        init(_ value: Value) { self.value = value }
+    }
+
     private static func limits(_ store: Store) throws {
         let semaphore = DispatchSemaphore(value: 0)
         Task {
@@ -213,8 +278,7 @@ enum CommandLineTool {
                 if let error = result.errors[app] { print("\(app.display): \(error)") }
             }
             print("")
-            print(MenuBarTitle.render(snapshots: result.snapshots,
-                                      totals: (try? store.totals(since: Date().addingTimeInterval(-5 * 3600))) ?? [:]))
+            print(MenuBarTitle.render(inputs(store: store, snapshots: result.snapshots)))
             semaphore.signal()
         }
         semaphore.wait()

@@ -106,10 +106,24 @@ final class AppModel: ObservableObject {
             rebuildTitle()
         }
     }
-    private static let show5hKey = "menuBarShow5h"
-    private static let show7dKey = "menuBarShow7d"
-    private static let showForecastKey = "menuBarShowForecast"
-    private static let showTokensKey = "menuBarShowTokens"
+    /// Whether the line may shorten itself when the bar runs out of room.
+    /// See `MenuBarFit` for what "runs out of room" means on macOS — the item
+    /// is not truncated, it disappears — and `MenuBarTitle.variants` for the
+    /// fixed order in which detail is dropped.
+    @Published var autoShortenInBar = true {
+        didSet {
+            UserDefaults.standard.set(autoShortenInBar, forKey: Self.autoShortenKey)
+            fit.reset()
+            rebuildTitle()
+        }
+    }
+    private static let autoShortenKey = MenuBarDefaults.autoShorten
+    private let fit = MenuBarFit()
+
+    private static let show5hKey = MenuBarDefaults.show5h
+    private static let show7dKey = MenuBarDefaults.show7d
+    private static let showForecastKey = MenuBarDefaults.showForecast
+    private static let showTokensKey = MenuBarDefaults.showTokens
 
     /// Which apps get a segment in the menu bar line. Everything else about an
     /// app — the popover section, the detail window — stays visible regardless;
@@ -120,7 +134,7 @@ final class AppModel: ObservableObject {
             rebuildTitle()
         }
     }
-    private static let visibleAppsKey = "menuBarVisibleApps"
+    private static let visibleAppsKey = MenuBarDefaults.visibleApps
 
     /// The screen ticks far more often than the network does.
     ///
@@ -137,6 +151,8 @@ final class AppModel: ObservableObject {
     var statsEngine: StatsEngine? { stats }
     private var loop: Task<Void, Never>?
     private var lastLimitsFetch: Date?
+    private var screenObserver: (any NSObjectProtocol)?
+    private var activationObserver: (any NSObjectProtocol)?
 
     init() {
         do {
@@ -164,6 +180,9 @@ final class AppModel: ObservableObject {
         if defaults.object(forKey: Self.showTokensKey) != nil {
             showTokensInBar = defaults.bool(forKey: Self.showTokensKey)
         }
+        if defaults.object(forKey: Self.autoShortenKey) != nil {
+            autoShortenInBar = defaults.bool(forKey: Self.autoShortenKey)
+        }
         // No saved preference yet (fresh install, or upgrading from a build
         // before this existed) means "everything visible" — the checkbox
         // starts as a no-op, not as an unexplained app disappearing.
@@ -171,7 +190,9 @@ final class AppModel: ObservableObject {
             visibleApps = Set(saved.compactMap(AppKind.init(rawValue:)))
         }
         modelColors = ModelColors(models: (try? store?.distinctModels()) ?? [])
-        openRouterKeyConfigured = OpenRouterKeychain.read() != nil
+        // Samo „czy klucz jest” — bez odczytu sekretu, więc bez okna z hasłem
+        // przy każdym starcie.
+        openRouterKeyConfigured = OpenRouterKeychain.exists()
         openRouterSelectedHash = UserDefaults.standard.string(forKey: Self.selectedHashKey)
         loadCachedSnapshots()
         loadCachedOpenRouterCosts()
@@ -182,6 +203,7 @@ final class AppModel: ObservableObject {
     /// menu-bar-only app depends on which mode the loop happens to be in, and
     /// silently stops firing when that changes.
     func start() {
+        watchScreenChanges()
         guard loop == nil else { return }
         loop = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -194,6 +216,39 @@ final class AppModel: ObservableObject {
     func stop() {
         loop?.cancel()
         loop = nil
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        screenObserver = nil
+        if let activationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
+        }
+        activationObserver = nil
+    }
+
+    /// Plugging in an external display moves the item to a different bar with a
+    /// different amount of room — and, on a screen without a notch, no
+    /// measurable left edge at all. Everything the fitter concluded about the
+    /// old bar stops being true at that instant.
+    ///
+    /// Switching apps matters for the same reason without changing anything
+    /// about the screens: the menu bar follows the active window to another
+    /// display, and the item goes with it. Without this the line would keep the
+    /// length it needed on the cramped built-in bar for up to a whole tick
+    /// after moving to a roomy external one.
+    private func watchScreenChanges() {
+        guard screenObserver == nil else { return }
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main) { _ in
+                Task { @MainActor [weak self] in
+                    self?.fit.reset()
+                    self?.rebuildTitle()
+                }
+            }
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil, queue: .main) { _ in
+                Task { @MainActor [weak self] in self?.rebuildTitle() }
+            }
     }
 
     /// Shows whatever the last run left on disk, so the menu bar is populated
@@ -275,6 +330,9 @@ final class AppModel: ObservableObject {
             let stale = snapshots.compactMapValues(\.staleReason)
                 .map { "\($0.key.rawValue): \($0.value)" }
             let line = "refresh \(Date()) → \(menuBarTitle)\n  błędy: \(errors)  nieświeże: \(stale)\n"
+                + "  pasek: \(fit.diagnostics(title: menuBarTitle))\n"
+                + (ProcessInfo.processInfo.environment["AILIMITS_TRACE"] == "2"
+                   ? fit.windowDump() + "\n" : "")
             FileHandle.standardError.write(Data(line.utf8))
         }
     }
@@ -414,14 +472,23 @@ final class AppModel: ObservableObject {
         try? data.write(to: openRouterCacheURL, options: .atomic)
     }
 
+    /// The one funnel for the menu bar line — every toggle, every refresh and
+    /// every screen change lands here, so nothing can set the title behind the
+    /// fitter's back.
     private func rebuildTitle() {
         var todayUsage: [AppKind: Double] = [:]
         if let today = openRouterTodayUsage { todayUsage[.dsh] = today }
-        menuBarTitle = MenuBarTitle.render(snapshots: snapshots, totals: windowTotals,
-                                           forecasts: forecasts, todayUsage: todayUsage,
-                                           show5h: show5hInBar, show7d: show7dInBar,
-                                           showForecast: showForecastInBar,
-                                           showTokens: showTokensInBar,
-                                           visibleApps: visibleApps)
+        let inputs = MenuBarTitle.Inputs(snapshots: snapshots, totals: windowTotals,
+                                         forecasts: forecasts, todayUsage: todayUsage)
+        let style = MenuBarTitle.Style(show5h: show5hInBar, show7d: show7dInBar,
+                                       showForecast: showForecastInBar,
+                                       showTokens: showTokensInBar,
+                                       apps: AppKind.allCases.filter(visibleApps.contains))
+        guard autoShortenInBar else {
+            menuBarTitle = MenuBarTitle.render(inputs, style: style)
+            return
+        }
+        let variants = MenuBarTitle.variants(inputs, style: style)
+        menuBarTitle = fit.fit(variants) { [weak self] title in self?.menuBarTitle = title }
     }
 }

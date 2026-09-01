@@ -82,6 +82,12 @@ struct PopoverView: View {
             Toggle("Tokeny", isOn: $model.showTokensInBar)
                 .help("Harness pokazuje tokeny zawsze — rozlicza się nimi wprost przez OpenRouter, więc ta zgoda go nie dotyczy.")
             Divider()
+            Toggle("Skracaj przy braku miejsca", isOn: $model.autoShortenInBar)
+                .help("Gdy linia nie mieści się w pasku, macOS chowa cały element — nie skraca go. "
+                      + "Z tą opcją linia zwija się sama: najpierw prognoza, potem tokeny, okno 7 d "
+                      + "i czas do resetu, a na końcu odpadają całe aplikacje (najpierw Harness) i "
+                      + "pojawia się „…”. Alarmy ⚠ i ↻ zostają zawsze.")
+            Divider()
             Text("Widoczne w pasku menu").font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.muted)
             ForEach(AppKind.allCases, id: \.self) { app in
                 Toggle(app.display, isOn: visibleBinding(for: app))

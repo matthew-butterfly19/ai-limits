@@ -25,6 +25,42 @@ Ikona zębatki obok niego chowa dwa ustawienia: co ma prowadzić w pasku menu (o
 albo oba) i które aplikacje w ogóle dostają tam segment — przydatne, gdy jedna z nich milczy
 tygodniami i tylko zajmuje miejsce.
 
+## Kiedy w pasku brakuje miejsca
+
+macOS nie skraca elementu paska menu, który się nie mieści — **chowa go w całości**, razem z
+ikonami sąsiadów po lewej. Pełna linia dla trzech aplikacji ma ok. 800 pt, a między notchem
+a blokiem Centrum sterowania bywa 270 pt, więc na MacBooku z kilkoma innymi ikonami znika
+cała linia i nic tego nie sygnalizuje.
+
+Dlatego linia zwija się sama (checkbox *Skracaj przy braku miejsca* pod zębatką, domyślnie
+włączony). Kolejność jest stała i idzie od najtańszej straty do najdroższej: odstępy wokół
+separatora, prognoza `≈88%`, tokeny, okno 7 d, czas do resetu, potem odpadają całe aplikacje
+— najpierw Harness, bo nie ma okna limitu, więc nigdy nie jest tą aplikacją, której limit
+zaraz się skończy — a na dwóch ostatnich szczeblach znikają też nazwy i zostaje `21% ⚠`.
+Alarm `⚠` i znacznik cache `↻` zostają zawsze; `…` na końcu linii znaczy „to nie jest już
+pełny obraz”. Panel po kliknięciu pokazuje komplet.
+
+Przy dwóch ekranach macOS trzyma **osobną kopię elementu na każdej belce**, w różnych
+miejscach, a tytuł jest wspólny — więc o długość linii gra ta belka, która jest najciaśniejsza
+spośród tych, które w ogóle mogą element narysować. Belka bez miejsca nie zabiera informacji
+z tej, na której miejsce jest: i tak niczego tam nie widać.
+
+Gdzie przebiega granica rysowalnego paska, aplikacja **uczy się z obserwacji**, a nie zakłada:
+`auxiliaryTopRightArea` (prawy brzeg notcha) potrafi się mylić o kilkadziesiąt punktów, a na
+monitorze bez notcha nie ma żadnego API, które by tę granicę podawało. Po każdej zmianie linii
+aplikacja pyta window servera, czy element faktycznie został narysowany, i zapamiętuje
+najdalszą pozycję, na której go odrzucono. Lekcja wygasa po pół godziny, bo na ekranie bez
+notcha granica zależy od menu aktywnej aplikacji. Tam, gdzie granicy nie da się policzyć,
+aplikacja po prostu próbuje: po każdym udanym wyświetleniu sięga o jeden szczebel wyżej, aż
+któryś zostanie odrzucony. `AILIMITS_TRACE=1` pokazuje cały ten przebieg krok po kroku.
+
+`AILimits --menubar` wypisuje całą drabinę z szerokościami w punktach; uruchomiona aplikacja
+z `AILIMITS_TRACE=1` dopisuje do tego, gdzie leży jej slot w pasku i czy macOS ją rysuje.
+Jednego ta poprawka nie zrobi: jeśli system ustawi element **na lewo od notcha**, żadna
+długość nie pomoże — element trzyma swoje miejsce w kolejce, a miejsce zależy od tego, którą
+ikonę system zarejestrował pierwszą. Z kodu nie da się tego ustawić; ręcznie przesuwa się
+ikony ⌘-przeciągnięciem.
+
 ## Instalacja
 
 ```bash
