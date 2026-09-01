@@ -382,7 +382,7 @@ final class AppModel: ObservableObject {
     func refreshOpenRouterKeys(force: Bool = false) async {
         guard openRouterKeyConfigured else { return }
         guard force || openRouterKeysShouldRefresh else { return }
-        guard let key = OpenRouterKeychain.read() else {
+        guard let key = await OpenRouterKeychain.readOffMain() else {
             openRouterKeyConfigured = false
             openRouterError = "klucz nie znaleziony w Keychainie"
             return
@@ -409,7 +409,7 @@ final class AppModel: ObservableObject {
     /// jak tabela modeli traktuje ten sam stan (myślnik, nie komunikat).
     func refreshOpenRouterCosts(force: Bool = false) async {
         guard openRouterKeyConfigured, let hash = openRouterSelectedHash else { return }
-        guard let key = OpenRouterKeychain.read() else {
+        guard let key = await OpenRouterKeychain.readOffMain() else {
             openRouterKeyConfigured = false
             openRouterError = "klucz nie znaleziony w Keychainie"
             return

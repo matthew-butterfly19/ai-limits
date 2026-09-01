@@ -68,6 +68,17 @@ enum OpenRouterKeychain {
         return SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess
     }
 
+    /// To samo, ale poza główną kolejką.
+    ///
+    /// Okno Keychaina blokuje wątek, który poprosił o sekret. Na głównym
+    /// oznaczało to zamrożoną aplikację — nieklikalny panel, wstrzymane
+    /// odświeżanie, pasek stojący w miejscu — na cały czas, gdy dialog czeka na
+    /// hasło. Sam odczyt jest i tak jednorazowy (dalej działa cache), ale ten
+    /// jeden raz nie ma prawa zatrzymać reszty.
+    static func readOffMain() async -> String? {
+        await Task.detached(priority: .userInitiated) { read() }.value
+    }
+
     /// Zapis lub aktualizacja klucza — usuń istniejący wpis, dodaj nowy.
     static func save(_ key: String) throws {
         lock.lock()

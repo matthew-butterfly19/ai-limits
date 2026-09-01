@@ -69,9 +69,11 @@ final class MenuBarFit {
     /// observation — `hiddenAt` is the furthest right an item was refused,
     /// `shownAt` the furthest left one was drawn.
     private struct Lesson {
-        var screen: String
         var hiddenAt: CGFloat?
         var shownAt: CGFloat?
+        /// Ta belka odmówiła nawet najkrótszej wersji. Nie da się na niej
+        /// pokazać niczego, więc nie ma też prawa dyktować długości drugiej.
+        var impossible = false
         /// The longest rung this bar was seen drawing (rungs are numbered from
         /// the longest down). Where no budget can be computed, this is what
         /// spares the user watching the line grow one rung at a time every time
@@ -79,7 +81,19 @@ final class MenuBarFit {
         var bestIndex: Int?
         var stamp = Date()
     }
-    private var lesson: Lesson?
+    /// Po jednej lekcji na belkę. Jedna wspólna znaczyła, że nauka na ekranie
+    /// wbudowanym kasowała wszystko, czego aplikacja dowiedziała się o
+    /// zewnętrznym — a przy dwóch ekranach obie belki żyją równolegle.
+    private var lessons: [String: Lesson] = [:]
+
+    private func signature(_ screen: NSScreen) -> String {
+        "\(Int(screen.frame.minX))x\(Int(screen.frame.width))"
+    }
+
+    private func lesson(for screen: NSScreen) -> Lesson? {
+        guard let lesson = lessons[signature(screen)] else { return nil }
+        return Date().timeIntervalSince(lesson.stamp) < Self.lessonLifetime ? lesson : nil
+    }
 
     private var verification: Task<Void, Never>?
     /// Which rung was last handed out — where the fitting pass starts.
@@ -106,7 +120,7 @@ final class MenuBarFit {
     /// checks it against what the window server actually drew and walks down
     /// until the item reappears. Cancels any pass still running, so a burst of
     /// refreshes leaves exactly one loop behind.
-    func verify(_ variants: [String], apply: @escaping (String) -> Void) {
+    func verify(_ variants: [String], apply: @escaping (String) -> Void, attempt: Int = 0) {
         verification?.cancel()
         guard variants.count > 1 else { return }
         verification = Task { @MainActor [weak self] in
@@ -176,9 +190,19 @@ final class MenuBarFit {
                     guard self.budget(for: window) == nil, index - 1 >= ceiling else { return }
                     index -= 1
                 } else {
-                    self.learn(window: window, minX: slot.minX, rendered: false, index: index)
+                    let shortest = index == variants.count - 1
+                    self.learn(window: window, minX: slot.minX, rendered: false,
+                               index: index, shortest: shortest)
                     ceiling = index + 1
-                    guard index + 1 < variants.count else { return }
+                    guard !shortest else {
+                        // Nothing fits on this bar at all. Now that this is
+                        // known rather than estimated, the other bar gets the
+                        // vote — otherwise a display that shows nothing keeps
+                        // the one that could show everything cut to `30% …`.
+                        self.trace("ta belka nie narysuje nic — próbuję drugiej")
+                        if attempt == 0 { self.verify(variants, apply: apply, attempt: 1) }
+                        return
+                    }
                     index += 1
                 }
                 self.currentIndex = index
@@ -227,36 +251,45 @@ final class MenuBarFit {
     func reset() {
         verification?.cancel()
         verification = nil
-        lesson = nil
+        lessons.removeAll()
         currentIndex = 0
     }
 
     /// Records what the bar did with the item at this position. Two bounds,
     /// never mixed: a refusal moves the edge right, a success caps how far
     /// right it can be claimed to be.
-    private func learn(window: NSWindow, minX: CGFloat, rendered: Bool, index: Int) {
+    private func learn(window: NSWindow, minX: CGFloat, rendered: Bool, index: Int,
+                       shortest: Bool = false) {
         guard let screen = barScreen(for: window) else { return }
-        let signature = "\(Int(screen.frame.minX))x\(Int(screen.frame.width))"
-        var updated = lesson?.screen == signature ? lesson! : Lesson(screen: signature)
+        var updated = lesson(for: screen) ?? Lesson()
         if rendered {
             updated.shownAt = min(updated.shownAt ?? minX, minX)
             updated.bestIndex = min(updated.bestIndex ?? index, index)
+            updated.impossible = false
         } else {
             updated.hiddenAt = max(updated.hiddenAt ?? minX, minX)
             // Refused here, so nothing longer than the next rung down can be
             // the starting guess any more.
             updated.bestIndex = max(updated.bestIndex ?? (index + 1), index + 1)
+            // Refused even at the shortest rung: this bar cannot draw the item
+            // at any length, and a budget estimate saying otherwise has just
+            // been proven wrong by the bar itself.
+            if shortest { updated.impossible = true }
             updated.stamp = Date()
         }
-        lesson = updated
+        lessons[signature(screen)] = updated
     }
 
     /// The rung this bar last managed to draw, if it is still worth trusting.
     private func rememberedIndex(for window: NSWindow) -> Int? {
-        guard let screen = barScreen(for: window), let lesson,
-              lesson.screen == "\(Int(screen.frame.minX))x\(Int(screen.frame.width))"
-        else { return nil }
-        return lesson.bestIndex
+        guard let screen = barScreen(for: window) else { return nil }
+        return lesson(for: screen)?.bestIndex
+    }
+
+    /// Whether this bar has proven it cannot draw the item at any length.
+    private func isImpossible(_ window: NSWindow) -> Bool {
+        guard let screen = barScreen(for: window) else { return false }
+        return lesson(for: screen)?.impossible == true
     }
 
     // MARK: - Measurement
@@ -292,9 +325,8 @@ final class MenuBarFit {
     func drawableEdge(screen: NSScreen) -> CGFloat? {
         let notch = screen.auxiliaryTopRightArea?.minX
         var edge = notch
-        if let lesson, lesson.screen == "\(Int(screen.frame.minX))x\(Int(screen.frame.width))" {
-            if let hidden = lesson.hiddenAt,
-               Date().timeIntervalSince(lesson.stamp) < Self.lessonLifetime {
+        if let lesson = lesson(for: screen) {
+            if let hidden = lesson.hiddenAt {
                 edge = max(edge ?? hidden, hidden + 1)
             }
             // `shownAt` is deliberately *not* used to pull the edge left. It
@@ -423,11 +455,13 @@ final class MenuBarFit {
         let scored = candidates.map { ($0, budget(for: $0) ?? unlimited) }
         if let active = activeScreen(),
            let onActive = scored.first(where: {
-               abs($0.0.frame.maxY - active.frame.maxY) < 2 && $0.1 >= minimumWidth
+               abs($0.0.frame.maxY - active.frame.maxY) < 2
+                   && $0.1 >= minimumWidth && !isImpossible($0.0)
            }) {
             return onActive.0
         }
-        if let tightest = scored.filter({ $0.1 >= minimumWidth }).min(by: { $0.1 < $1.1 }) {
+        if let tightest = scored.filter({ $0.1 >= minimumWidth && !isImpossible($0.0) })
+            .min(by: { $0.1 < $1.1 }) {
             return tightest.0
         }
         return scored.max(by: { $0.1 < $1.1 })?.0
@@ -512,10 +546,12 @@ final class MenuBarFit {
         let rendered = isRendered().map { $0 ? "tak" : "NIE — macOS chowa element" } ?? "?"
         let measured = title.isEmpty ? "" : String(format: "  zmierzone %.0f/%.0f pt",
                                                    width(of: title), window.frame.width)
-        let learned = lesson.map {
-            String(format: "  lekcja[%@]: schowany≤%@ pokazany≥%@", $0.screen,
+        let learned = screen.flatMap { lesson(for: $0) }.map {
+            String(format: "  lekcja: schowany≤%@ pokazany≥%@ szczebel≥%@%@",
                    $0.hiddenAt.map { String(format: "%.0f", $0) } ?? "—",
-                   $0.shownAt.map { String(format: "%.0f", $0) } ?? "—")
+                   $0.shownAt.map { String(format: "%.0f", $0) } ?? "—",
+                   $0.bestIndex.map(String.init) ?? "—",
+                   $0.impossible ? " NIC SIĘ NIE ZMIEŚCI" : "")
         } ?? ""
         return String(format: "slot %.0f…%.0f  krawędź→%@  budżet %@  widoczny: %@%@%@",
                       window.frame.minX, window.frame.maxX,
