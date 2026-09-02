@@ -569,7 +569,8 @@ final class AppModel: ObservableObject {
             app.setActivationPolicy(.regular)
             dockLabel = nil
         }
-        let headline = MenuBarTitle.headline(menuBarInputs())
+        let headline = MenuBarTitle.headline(menuBarInputs(),
+                                             apps: AppKind.allCases.filter(visibleApps.contains))
         let label = "\(headline?.name ?? "—")|\(headline?.percent ?? "—")|\(headline?.alarmed ?? false)"
         guard label != dockLabel else { return }
         app.applicationIconImage = DockIcon.image(name: headline?.name,

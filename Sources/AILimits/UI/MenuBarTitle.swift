@@ -168,8 +168,11 @@ enum MenuBarTitle {
     /// Jedna liczba warta pokazania, gdy nie ma jej gdzie pokazać w pasku —
     /// ta sama aplikacja, która przeżywa na ostatnim szczeblu drabiny. Używa
     /// tego ikona w Docku (patrz `DockIcon`).
-    static func headline(_ inputs: Inputs) -> (name: String, percent: String, alarmed: Bool)? {
-        let apps = AppKind.allCases.filter { inputs.snapshots[$0]?.window(minutes: 300) != nil }
+    static func headline(_ inputs: Inputs,
+                         apps: [AppKind]) -> (name: String, percent: String, alarmed: Bool)? {
+        // Ta sama lista, co w drabinie: aplikacja odznaczona w „Widoczne w
+        // pasku menu” nie ma prawa wrócić bocznymi drzwiami na ikonę w Docku.
+        let apps = apps.filter { inputs.snapshots[$0]?.window(minutes: 300) != nil }
         guard let app = ranking(apps, inputs: inputs).first,
               let window = inputs.snapshots[app]?.window(minutes: 300) else { return nil }
         let alarmed = (inputs.forecasts[app] ?? []).contains { $0.verdict == .short }
