@@ -40,6 +40,11 @@ zaraz się skończy — a na dwóch ostatnich szczeblach znikają też nazwy i z
 Alarm `⚠` i znacznik cache `↻` zostają zawsze; `…` na końcu linii znaczy „to nie jest już
 pełny obraz”. Panel po kliknięciu pokazuje komplet.
 
+Najniżej drabina przestaje skracać, a zaczyna po prostu być: `47%` bez `…` (61 pt), a pod tym
+sam znak `◆` — albo `⚠`, jeśli któreś okno kończy się przed resetem (47 pt, z czego 37 to
+nieusuwalny margines przycisku, więc węziej się nie da). Ten ostatni szczebel nie niesie już
+liczby, ale jest czymś, w co da się kliknąć.
+
 Przy dwóch ekranach macOS trzyma **osobną kopię elementu na każdej belce**, w różnych
 miejscach, a tytuł jest wspólny — więc o długość linii gra ta belka, która jest najciaśniejsza
 spośród tych, które w ogóle mogą element narysować. Belka bez miejsca nie zabiera informacji
@@ -56,10 +61,17 @@ któryś zostanie odrzucony. `AILIMITS_TRACE=1` pokazuje cały ten przebieg krok
 
 `AILimits --menubar` wypisuje całą drabinę z szerokościami w punktach; uruchomiona aplikacja
 z `AILIMITS_TRACE=1` dopisuje do tego, gdzie leży jej slot w pasku i czy macOS ją rysuje.
-Jednego ta poprawka nie zrobi: jeśli system ustawi element **na lewo od notcha**, żadna
-długość nie pomoże — element trzyma swoje miejsce w kolejce, a miejsce zależy od tego, którą
-ikonę system zarejestrował pierwszą. Z kodu nie da się tego ustawić; ręcznie przesuwa się
-ikony ⌘-przeciągnięciem.
+
+Jednego żadna długość nie naprawi: jeśli system ustawi element **na lewo od notcha**, nie
+zostanie narysowany nawet jako pojedynczy znak — element trzyma swoje miejsce w kolejce, a
+miejsce zależy od tego, którą ikonę system zarejestrował pierwszą. Z kodu nie da się tego
+ustawić; ręcznie przesuwa się ikony ⌘-przeciągnięciem (w prawo, bo pasek pakuje się od prawej
+i chowa to, co zostaje najbardziej z lewej).
+
+Na ten jeden przypadek jest ostatnie zabezpieczenie: gdy pasek odrzuci nawet sam znak,
+pojawia się **ikona w Docku** z procentem okna 5 h tej aplikacji, która jest najbliżej ściany,
+a kliknięcie w nią otwiera okno szczegółów. Znika, gdy tylko pasek znowu cokolwiek rysuje.
+Checkbox *Ikona w Docku, gdy pasek nic nie pokazuje* (pod zębatką) wyłącza ją na stałe.
 
 ## Instalacja
 
@@ -84,7 +96,12 @@ Wymaga macOS 14+ i Command Line Tools. Xcode nie jest potrzebny.
 | `~/.codex/sessions/**/*.jsonl` | jw. plus historyczne próbki limitów z samych logów |
 | `~/.dsh/sessions/**/session.jsonl.zstd` | tokeny per wątek i model dla dsh — bez limitu, bo dsh rozlicza się przez OpenRouter, nie przez subskrypcję z oknem |
 
-Token OAuth czytamy z Keychaina przy każdym odczycie i nigdzie go nie zapisujemy.
+Token OAuth Claude'a czytamy z Keychaina przy każdym odczycie i nigdzie go nie zapisujemy.
+Management key do OpenRoutera leży w pliku `~/Library/Application Support/AILimits/openrouter-key`
+z prawami `0600`, a nie w Keychainie: lista dostępu wpisu w keychainie jest przypięta do
+konkretnego pliku binarnego, więc po każdej instalacji lokalnego builda system pytał o hasło do
+keychaina od nowa i „Zawsze zezwalaj” tego nie kończyło. Klucz zapisany przez starszą wersję
+aplikacja przenosi do pliku sama, przy pierwszym odczycie — to jedno, ostatnie pytanie o hasło.
 Wszystko inne zostaje na dysku, w SQLite pod `~/Library/Application Support/AILimits/`.
 Poza dwoma zapytaniami o limity — do Anthropica i OpenAI, czyli tam, gdzie te limity i tak
 są liczone — nic nie wychodzi na zewnątrz. Szczegóły w [SECURITY.md](SECURITY.md).

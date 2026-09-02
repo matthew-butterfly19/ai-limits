@@ -21,6 +21,10 @@ enum Period: String, CaseIterable, Identifiable {
 
 struct DetailWindow: View {
     static let identifier = "ailimits-detail"
+    /// Tytuł okna. Nie tylko do wyświetlenia: po kliknięciu w ikonę w Docku
+    /// odnajdujemy po nim okno w `NSApp.windows`, żeby wyciągnąć je na wierzch —
+    /// samo `openWindow` potrafi je utworzyć za innym oknem.
+    static let title = "AI Limits — szczegóły"
     private static let topAnchor = "top"
 
     @EnvironmentObject private var model: AppModel

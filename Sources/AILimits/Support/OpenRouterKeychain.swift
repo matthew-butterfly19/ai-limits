@@ -1,15 +1,14 @@
 import Foundation
 import Security
 
-/// Management key dla OpenRoutera — własny item tej aplikacji, przez natywne
-/// `SecItem*`, nie przez `/usr/bin/security`.
+/// Stary wpis management key w Keychainie — dziś już **tylko źródło migracji**
+/// dla `OpenRouterKey`, który trzyma klucz w pliku.
 ///
-/// Odczyt tokena Claude'a (`ClaudeLiveLimits`) musi iść przez `security`, bo to
-/// cudzy item w cudzej access-group. Tu tworzymy własny wpis od zera — access
-/// group nie ma znaczenia, więc natywne API działa bez obejść i, w
-/// przeciwieństwie do `add-generic-password -w <sekret>`, nigdy nie stawia
-/// samego klucza w argumentach procesu, gdzie inny proces na tej maszynie
-/// mógłby go odczytać przez `ps` w czasie trwania wywołania.
+/// Powód przeprowadzki jest opisany w `OpenRouterKey`: lista dostępu wpisu jest
+/// przypięta do konkretnego pliku binarnego, więc każda instalacja lokalnego
+/// builda kończyła się kolejnym oknem z hasłem do keychaina. Zostaje tu tyle,
+/// ile trzeba, żeby raz przeczytać klucz zapisany przez starszą wersję i wpis
+/// usunąć, gdy użytkownik kasuje klucz.
 enum OpenRouterKeychain {
     static let service = "dev.ailimits.openrouter-management-key"
     private static let account = "openrouter"
@@ -68,33 +67,6 @@ enum OpenRouterKeychain {
         return SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess
     }
 
-    /// To samo, ale poza główną kolejką.
-    ///
-    /// Okno Keychaina blokuje wątek, który poprosił o sekret. Na głównym
-    /// oznaczało to zamrożoną aplikację — nieklikalny panel, wstrzymane
-    /// odświeżanie, pasek stojący w miejscu — na cały czas, gdy dialog czeka na
-    /// hasło. Sam odczyt jest i tak jednorazowy (dalej działa cache), ale ten
-    /// jeden raz nie ma prawa zatrzymać reszty.
-    static func readOffMain() async -> String? {
-        await Task.detached(priority: .userInitiated) { read() }.value
-    }
-
-    /// Zapis lub aktualizacja klucza — usuń istniejący wpis, dodaj nowy.
-    static func save(_ key: String) throws {
-        lock.lock()
-        cached = nil
-        lock.unlock()
-        SecItemDelete(baseQuery as CFDictionary)
-        var attributes = baseQuery
-        attributes[kSecValueData as String] = Data(key.utf8)
-        guard SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess else {
-            throw KeychainError.saveFailed
-        }
-        lock.lock()
-        cached = key
-        lock.unlock()
-    }
-
     static func delete() throws {
         lock.lock()
         cached = nil
@@ -108,12 +80,10 @@ enum OpenRouterKeychain {
     }
 
     enum KeychainError: LocalizedError {
-        case saveFailed
         case deleteFailed
 
         var errorDescription: String? {
             switch self {
-            case .saveFailed:   return "nie udało się zapisać klucza do Keychaina"
             case .deleteFailed: return "nie udało się usunąć klucza z Keychaina"
             }
         }

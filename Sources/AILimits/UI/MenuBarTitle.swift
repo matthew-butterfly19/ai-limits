@@ -23,7 +23,8 @@ import Foundation
 /// nobody could predict. `variants` drops content too, but only when the
 /// alternative is macOS hiding the whole line (which it does — see
 /// `MenuBarFit`), in a fixed published order, and it says so with `…` the
-/// moment a whole app falls off. The two alarm glyphs survive every rung.
+/// moment a whole app falls off. The two alarm glyphs survive every rung but
+/// the last one, which is a single character wide and keeps only the alarm.
 enum MenuBarTitle {
     static let staleMarker = "↻"
     static let wideSeparator = "  ┃  "
@@ -134,7 +135,45 @@ enum MenuBarTitle {
             current.apps = Array(ranked.prefix(keep))
             add()
         }
+
+        // Poniżej drabina przestaje być skracaniem, a zaczyna być obecnością.
+        // Na belce wbudowanego ekranu zmierzony prześwit to około sześćdziesiąt
+        // punktów, a najkrótszy szczebel z `…` ma siedemdziesiąt trzy — czyli
+        // nie mieści się o kilkanaście punktów i nie widać nic. Sam znacznik
+        // `…` kosztuje 14 pt, więc tutaj znika: przy jednej liczbie i tak
+        // widać, że to nie jest cała prawda.
+        current.truncated = false
+        current.apps = Array(ranked.prefix(1))
+        add()
+        // I absolutnie ostatni szczebel: sam znak, bez liczby. Nie mówi nic
+        // poza „aplikacja żyje”, ale jest najwęższym elementem, jaki da się
+        // postawić w pasku (≈47 pt, z czego 37 to nieusuwalny margines
+        // przycisku) — i wystarczy, żeby dało się w niego kliknąć i zobaczyć
+        // resztę w panelu. Alarm ma tu własny znak, więc jedyna rzecz, której
+        // drabina obiecuje nie zgubić, nie ginie nawet tutaj.
+        let last = lastResort(inputs)
+        if seen.insert(last).inserted { texts.append(last) }
         return texts
+    }
+
+    /// Najkrótsza możliwa treść elementu paska: sam znak. `⚠`, jeśli
+    /// którekolwiek okno kończy się przed resetem — inaczej neutralny romb.
+    static func lastResort(_ inputs: Inputs) -> String {
+        let alarmed = inputs.forecasts.values.contains { forecasts in
+            forecasts.contains { $0.verdict == .short }
+        }
+        return alarmed ? "⚠" : "◆"
+    }
+
+    /// Jedna liczba warta pokazania, gdy nie ma jej gdzie pokazać w pasku —
+    /// ta sama aplikacja, która przeżywa na ostatnim szczeblu drabiny. Używa
+    /// tego ikona w Docku (patrz `DockIcon`).
+    static func headline(_ inputs: Inputs) -> (name: String, percent: String, alarmed: Bool)? {
+        let apps = AppKind.allCases.filter { inputs.snapshots[$0]?.window(minutes: 300) != nil }
+        guard let app = ranking(apps, inputs: inputs).first,
+              let window = inputs.snapshots[app]?.window(minutes: 300) else { return nil }
+        let alarmed = (inputs.forecasts[app] ?? []).contains { $0.verdict == .short }
+        return (app.display, Format.percent(window.pct), alarmed)
     }
 
     /// Most important first — the order in which apps *survive*, not the order
@@ -225,6 +264,7 @@ enum MenuBarDefaults {
     static let showForecast = "menuBarShowForecast"
     static let showTokens = "menuBarShowTokens"
     static let autoShorten = "menuBarAutoShorten"
+    static let dockFallback = "menuBarDockFallback"
     static let visibleApps = "menuBarVisibleApps"
 
     /// The saved preferences as a style. Missing keys mean "never touched the

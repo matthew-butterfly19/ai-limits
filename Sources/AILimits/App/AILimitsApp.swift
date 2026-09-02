@@ -3,6 +3,7 @@ import SwiftUI
 struct AILimitsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel.shared
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         MenuBarExtra {
@@ -16,10 +17,28 @@ struct AILimitsApp: App {
             Text(model.menuBarTitle)
                 .font(.system(size: 11))
                 .monospacedDigit()
+                // Okno szczegółów otwiera `openWindow`, a ten żyje tylko w
+                // środowisku SwiftUI — delegat aplikacji (kliknięcie w ikonę w
+                // Docku) nie ma do niego dostępu, więc prosi przez
+                // powiadomienie. Etykieta paska jest jedynym widokiem, który
+                // istnieje przez cały czas działania aplikacji, więc to ona
+                // słucha; panel bywa zamknięty, okno szczegółów bywa niestworzone.
+                .onReceive(NotificationCenter.default.publisher(for: .aiLimitsShowDetail)) { _ in
+                    openWindow(id: DetailWindow.identifier)
+                    // Okno powstaje w tej samej pętli, w której o nie prosimy, i
+                    // potrafi wylądować za oknem aplikacji, z której przyszło
+                    // kliknięcie. Wyciągnięcie go na wierzch musi więc nastąpić
+                    // dopiero wtedy, gdy już istnieje.
+                    DispatchQueue.main.async {
+                        NSApp.activate(ignoringOtherApps: true)
+                        NSApp.windows.first { $0.title == DetailWindow.title }?
+                            .makeKeyAndOrderFront(nil)
+                    }
+                }
         }
         .menuBarExtraStyle(.window)
 
-        Window("AI Limits — szczegóły", id: DetailWindow.identifier) {
+        Window(DetailWindow.title, id: DetailWindow.identifier) {
             DetailWindow()
                 .environmentObject(model)
                 .onAppear { NSApp.activate(ignoringOtherApps: true) }
@@ -41,6 +60,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !yieldToOlderInstance() else { return }
         Task { @MainActor in AppModel.shared.start() }
+    }
+
+    /// Kliknięcie w ikonę w Docku. Ta ikona pojawia się tylko wtedy, gdy pasek
+    /// menu nie rysuje już nawet samego znaku (patrz `DockIcon`) — czyli
+    /// dokładnie wtedy, gdy jest jedynym sposobem, żeby dostać się do liczb.
+    /// Bez tej metody kliknięcie nie robi nic i awaryjna ikona wygląda na
+    /// zepsutą.
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                       hasVisibleWindows: Bool) -> Bool {
+        NotificationCenter.default.post(name: .aiLimitsShowDetail, object: nil)
+        return true
     }
 
     /// Two copies of a menu bar app mean two icons and two pollers hitting the
@@ -66,4 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
         return true
     }
+}
+
+extension Notification.Name {
+    /// „Pokaż szczegóły” z miejsca, które nie jest widokiem SwiftUI.
+    static let aiLimitsShowDetail = Notification.Name("dev.ailimits.showDetail")
 }

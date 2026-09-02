@@ -87,6 +87,11 @@ struct PopoverView: View {
                       + "Z tą opcją linia zwija się sama: najpierw prognoza, potem tokeny, okno 7 d "
                       + "i czas do resetu, a na końcu odpadają całe aplikacje (najpierw Harness) i "
                       + "pojawia się „…”. Alarmy ⚠ i ↻ zostają zawsze.")
+            Toggle("Ikona w Docku, gdy pasek nic nie pokazuje", isOn: $model.dockFallback)
+                .help("Na ciasnej belce (ekran wbudowany, dużo ikon) macOS potrafi schować element "
+                      + "razem z najkrótszą wersją linii — nie ma wtedy w co kliknąć. Wtedy, i tylko "
+                      + "wtedy, pojawia się ikona w Docku z procentem okna 5 h; kliknięcie otwiera "
+                      + "szczegóły. Znika, gdy pasek znowu cokolwiek rysuje.")
             Divider()
             Text("Widoczne w pasku menu").font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.muted)
             ForEach(AppKind.allCases, id: \.self) { app in

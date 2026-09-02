@@ -118,7 +118,26 @@ final class AppModel: ObservableObject {
         }
     }
     private static let autoShortenKey = MenuBarDefaults.autoShorten
+    /// Zapasowa ikona w Docku na czas, gdy pasek menu nie narysuje nawet
+    /// samego znaku. Nie „drugie miejsce na liczby”, tylko jedyne, w które da
+    /// się wtedy kliknąć — patrz `DockIcon`. Znika, gdy tylko pasek znowu
+    /// cokolwiek pokazuje.
+    @Published var dockFallback = true {
+        didSet {
+            UserDefaults.standard.set(dockFallback, forKey: Self.dockFallbackKey)
+            updateDock()
+        }
+    }
+    private static let dockFallbackKey = MenuBarDefaults.dockFallback
+
+    /// Czy pasek menu odmówił nawet najkrótszego szczebla drabiny — czyli czy
+    /// z paska nie da się w tej chwili odczytać ani kliknąć niczego.
+    @Published private(set) var barIsHidden = false
+
     private let fit = MenuBarFit()
+    /// Co jest w tej chwili narysowane na ikonie w Docku — żeby nie
+    /// przerysowywać jej co trzydzieści sekund bez powodu.
+    private var dockLabel: String?
 
     private static let show5hKey = MenuBarDefaults.show5h
     private static let show7dKey = MenuBarDefaults.show7d
@@ -151,6 +170,7 @@ final class AppModel: ObservableObject {
     var statsEngine: StatsEngine? { stats }
     private var loop: Task<Void, Never>?
     private var lastLimitsFetch: Date?
+    private var openRouterTask: Task<Void, Never>?
     private var screenObserver: (any NSObjectProtocol)?
     private var activationObserver: (any NSObjectProtocol)?
 
@@ -183,6 +203,14 @@ final class AppModel: ObservableObject {
         if defaults.object(forKey: Self.autoShortenKey) != nil {
             autoShortenInBar = defaults.bool(forKey: Self.autoShortenKey)
         }
+        if defaults.object(forKey: Self.dockFallbackKey) != nil {
+            dockFallback = defaults.bool(forKey: Self.dockFallbackKey)
+        }
+        fit.onHidden = { [weak self] hidden in
+            guard let self, self.barIsHidden != hidden else { return }
+            self.barIsHidden = hidden
+            self.updateDock()
+        }
         // No saved preference yet (fresh install, or upgrading from a build
         // before this existed) means "everything visible" — the checkbox
         // starts as a no-op, not as an unexplained app disappearing.
@@ -192,7 +220,7 @@ final class AppModel: ObservableObject {
         modelColors = ModelColors(models: (try? store?.distinctModels()) ?? [])
         // Samo „czy klucz jest” — bez odczytu sekretu, więc bez okna z hasłem
         // przy każdym starcie.
-        openRouterKeyConfigured = OpenRouterKeychain.exists()
+        openRouterKeyConfigured = OpenRouterKey.exists()
         openRouterSelectedHash = UserDefaults.standard.string(forKey: Self.selectedHashKey)
         loadCachedSnapshots()
         loadCachedOpenRouterCosts()
@@ -204,6 +232,9 @@ final class AppModel: ObservableObject {
     /// silently stops firing when that changes.
     func start() {
         watchScreenChanges()
+        // Dopiero teraz `NSApp` na pewno istnieje i przyjmuje zmianę polityki
+        // aktywacji — w inicjalizatorze modelu jest jeszcze za wcześnie.
+        updateDock()
         guard loop == nil else { return }
         loop = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -316,16 +347,14 @@ final class AppModel: ObservableObject {
 
         lastRefresh = Date()
         try? store.pruneLimits()
-        // Dsh nie ma okna limitu — zamiast tego odświeżamy koszty z OpenRoutera.
-        // Historia (/activity) rzadko, TTL 6h; `usage_daily` na kluczu w rytmie
-        // okien limitu, żeby "dziś" nie stało w miejscu przez pół dnia pracy.
-        if force || openRouterKeysShouldRefresh {
-            await refreshOpenRouterKeys(force: force)
-        }
-        if force || openRouterShouldRefresh {
-            await refreshOpenRouterCosts(force: force)
-        }
         rebuildTitle()
+        // Dsh nie ma okna limitu — zamiast tego odświeżamy koszty z OpenRoutera.
+        // Osobnym zadaniem, nie w tym `await`: pierwszy odczyt klucza z
+        // Keychaina potrafi stanąć na systemowym oknie z hasłem, a to okno
+        // czeka na użytkownika dowolnie długo. Dopóki to było w jednym ciągu,
+        // jedno niezauważone okno zatrzymywało całą pętlę odświeżania i w pasku
+        // nie pojawiało się nic — dokładnie „nie widzę zupełnie moich limitów”.
+        startOpenRouterRefresh(force: force)
         if ProcessInfo.processInfo.environment["AILIMITS_TRACE"] != nil {
             let stale = snapshots.compactMapValues(\.staleReason)
                 .map { "\($0.key.rawValue): \($0.value)" }
@@ -350,7 +379,7 @@ final class AppModel: ObservableObject {
 
     /// Zapisuje management key, pobiera listę kluczy i koszty.
     func saveOpenRouterKey(_ key: String) throws {
-        try OpenRouterKeychain.save(key)
+        try OpenRouterKey.save(key)
         openRouterKeyConfigured = true
         openRouterError = nil
         Task { await refreshOpenRouterKeys(force: true) }
@@ -359,7 +388,7 @@ final class AppModel: ObservableObject {
 
     /// Usuwa management key i cały stan pochodny.
     func deleteOpenRouterKey() throws {
-        try OpenRouterKeychain.delete()
+        try OpenRouterKey.delete()
         openRouterKeyConfigured = false
         openRouterKeys = []
         openRouterSelectedHash = nil
@@ -379,10 +408,30 @@ final class AppModel: ObservableObject {
 
     /// Pobiera listę kluczy API z OpenRoutera — przy okazji `usageDaily`,
     /// jedyne źródło "ile dziś" (patrz `openRouterTodayUsage`).
+    /// Historia (/activity) rzadko, TTL 6h; `usage_daily` na kluczu w rytmie
+    /// okien limitu, żeby „dziś” nie stało w miejscu przez pół dnia pracy.
+    /// Jedno zadanie naraz — jeśli poprzednie stoi na oknie Keychaina, kolejne
+    /// tiknięcie zegara ma je zostawić w spokoju, a nie dokładać drugie.
+    private func startOpenRouterRefresh(force: Bool) {
+        guard openRouterTask == nil else { return }
+        guard force || openRouterKeysShouldRefresh || openRouterShouldRefresh else { return }
+        openRouterTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.openRouterTask = nil }
+            if force || self.openRouterKeysShouldRefresh {
+                await self.refreshOpenRouterKeys(force: force)
+            }
+            if force || self.openRouterShouldRefresh {
+                await self.refreshOpenRouterCosts(force: force)
+            }
+            self.rebuildTitle()
+        }
+    }
+
     func refreshOpenRouterKeys(force: Bool = false) async {
         guard openRouterKeyConfigured else { return }
         guard force || openRouterKeysShouldRefresh else { return }
-        guard let key = await OpenRouterKeychain.readOffMain() else {
+        guard let key = await OpenRouterKey.readOffMain() else {
             openRouterKeyConfigured = false
             openRouterError = "klucz nie znaleziony w Keychainie"
             return
@@ -409,7 +458,7 @@ final class AppModel: ObservableObject {
     /// jak tabela modeli traktuje ten sam stan (myślnik, nie komunikat).
     func refreshOpenRouterCosts(force: Bool = false) async {
         guard openRouterKeyConfigured, let hash = openRouterSelectedHash else { return }
-        guard let key = await OpenRouterKeychain.readOffMain() else {
+        guard let key = await OpenRouterKey.readOffMain() else {
             openRouterKeyConfigured = false
             openRouterError = "klucz nie znaleziony w Keychainie"
             return
@@ -475,20 +524,57 @@ final class AppModel: ObservableObject {
     /// The one funnel for the menu bar line — every toggle, every refresh and
     /// every screen change lands here, so nothing can set the title behind the
     /// fitter's back.
-    private func rebuildTitle() {
+    /// Wszystko, z czego rysowana jest linia paska — i, gdy paska nie ma,
+    /// ikona w Docku. Jedno źródło, żeby obie nigdy nie mówiły czego innego.
+    private func menuBarInputs() -> MenuBarTitle.Inputs {
         var todayUsage: [AppKind: Double] = [:]
         if let today = openRouterTodayUsage { todayUsage[.dsh] = today }
-        let inputs = MenuBarTitle.Inputs(snapshots: snapshots, totals: windowTotals,
-                                         forecasts: forecasts, todayUsage: todayUsage)
+        return MenuBarTitle.Inputs(snapshots: snapshots, totals: windowTotals,
+                                   forecasts: forecasts, todayUsage: todayUsage)
+    }
+
+    private func rebuildTitle() {
+        let inputs = menuBarInputs()
         let style = MenuBarTitle.Style(show5h: show5hInBar, show7d: show7dInBar,
                                        showForecast: showForecastInBar,
                                        showTokens: showTokensInBar,
                                        apps: AppKind.allCases.filter(visibleApps.contains))
+        defer { updateDock() }
         guard autoShortenInBar else {
             menuBarTitle = MenuBarTitle.render(inputs, style: style)
             return
         }
         let variants = MenuBarTitle.variants(inputs, style: style)
         menuBarTitle = fit.fit(variants) { [weak self] title in self?.menuBarTitle = title }
+    }
+
+    /// Pokazuje albo chowa ikonę w Docku. Aplikacja startuje jako `LSUIElement`
+    /// (bez Docka i bez ⌘-Tab) i taka zostaje — polityka aktywacji zmienia się
+    /// tylko na czas, gdy pasek menu nie rysuje nic, bo wtedy bez ikony nie ma
+    /// żadnego sposobu, żeby otworzyć panel.
+    private func updateDock() {
+        guard let app = NSApp else { return }
+        guard dockFallback, barIsHidden else {
+            if app.activationPolicy() != .accessory {
+                app.setActivationPolicy(.accessory)
+                app.applicationIconImage = nil
+                dockLabel = nil
+            }
+            return
+        }
+        // Najpierw polityka, potem ikona: przy przejściu na `.regular` Dock
+        // bierze ikonę z pakietu (a pakiet jej nie ma — wychodzi biała
+        // kartka), więc podmiana musi nastąpić po tej zmianie, nie przed.
+        if app.activationPolicy() != .regular {
+            app.setActivationPolicy(.regular)
+            dockLabel = nil
+        }
+        let headline = MenuBarTitle.headline(menuBarInputs())
+        let label = "\(headline?.name ?? "—")|\(headline?.percent ?? "—")|\(headline?.alarmed ?? false)"
+        guard label != dockLabel else { return }
+        app.applicationIconImage = DockIcon.image(name: headline?.name,
+                                                  percent: headline?.percent,
+                                                  alarmed: headline?.alarmed ?? false)
+        dockLabel = label
     }
 }

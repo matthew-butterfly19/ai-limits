@@ -99,6 +99,14 @@ final class MenuBarFit {
     /// Which rung was last handed out — where the fitting pass starts.
     private var currentIndex = 0
 
+    /// Zgłasza wynik przebiegu jednym faktem: czy pasek menu odmówił nawet
+    /// najkrótszego szczebla. `true` znaczy, że przez pasek nie da się już
+    /// dotrzeć do tych liczb ani nawet w niego kliknąć — wtedy aplikacja musi
+    /// pokazać się gdzie indziej (patrz `AppModel.barIsHidden` i `DockIcon`).
+    /// Wołane tylko wtedy, gdy odpowiedź jest pewna: „belka nic nie rysuje”
+    /// (pełny ekran, wygaszony ekran) nic tu nie mówi i nic nie zgłasza.
+    var onHidden: ((Bool) -> Void)?
+
     /// The line to show right now, plus a pass that corrects it once the bar
     /// has stopped moving.
     ///
@@ -182,6 +190,7 @@ final class MenuBarFit {
                                   index, slot.minX, slot.maxX, drawn ? "tak" : "nie"))
                 if drawn {
                     self.learn(window: window, minX: slot.minX, rendered: true, index: index)
+                    self.onHidden?(false)
                     // On a screen with no notch there is no edge to compute a
                     // budget from, so the only way to find out whether a longer
                     // line would still be drawn is to try one. Without this the
@@ -200,7 +209,14 @@ final class MenuBarFit {
                         // vote — otherwise a display that shows nothing keeps
                         // the one that could show everything cut to `30% …`.
                         self.trace("ta belka nie narysuje nic — próbuję drugiej")
-                        if attempt == 0 { self.verify(variants, apply: apply, attempt: 1) }
+                        if attempt == 0, self.statusWindows().count > 1 {
+                            self.verify(variants, apply: apply, attempt: 1)
+                        } else {
+                            // Żadna belka nie narysuje nawet samego znaku.
+                            // Pasek menu przestał być drogą do tych liczb —
+                            // i, co ważniejsze, nie ma już w co kliknąć.
+                            self.onHidden?(true)
+                        }
                         return
                     }
                     index += 1
@@ -253,6 +269,9 @@ final class MenuBarFit {
         verification = nil
         lessons.removeAll()
         currentIndex = 0
+        // Zmiana ekranów unieważnia też werdykt „nic się nie zmieści”:
+        // dopóki nowy przebieg nie powie inaczej, zakładamy, że pasek działa.
+        onHidden?(false)
     }
 
     /// Records what the bar did with the item at this position. Two bounds,
