@@ -62,11 +62,24 @@ któryś zostanie odrzucony. `AILIMITS_TRACE=1` pokazuje cały ten przebieg krok
 `AILimits --menubar` wypisuje całą drabinę z szerokościami w punktach; uruchomiona aplikacja
 z `AILIMITS_TRACE=1` dopisuje do tego, gdzie leży jej slot w pasku i czy macOS ją rysuje.
 
-Jednego żadna długość nie naprawi: jeśli system ustawi element **na lewo od notcha**, nie
-zostanie narysowany nawet jako pojedynczy znak — element trzyma swoje miejsce w kolejce, a
-miejsce zależy od tego, którą ikonę system zarejestrował pierwszą. Z kodu nie da się tego
-ustawić; ręcznie przesuwa się ikony ⌘-przeciągnięciem (w prawo, bo pasek pakuje się od prawej
-i chowa to, co zostaje najbardziej z lewej).
+Osobna sprawa to **miejsce w kolejce ikon**, bo nie naprawia go żadna długość. Zmierzone na
+MacBooku z notchem: system stawiał element na 993…1026 pt, gdy rysowalna część paska zaczyna
+się od 1010 — nie widać nic, a skracanie przesuwa tylko lewą krawędź slotu, bo prawa jest
+przybita. `MenuBarExtra` ze SwiftUI nie daje na to żadnego uchwytu, dlatego aplikacja ma
+własny `NSStatusItem` z `autosaveName`: pozycję zapisuje się w `UserDefaults`, przy pierwszym
+uruchomieniu ustawiamy ją po prawej stronie paska i od tej pory element jest rysowany. Twoje
+⌘-przeciągnięcie nadpisuje ten sam klucz, więc ręczny wybór wygrywa.
+
+Skoro element rysuje się zawsze, pytanie o długość zmienia sens: nie „czy mnie widać”, tylko
+„ile mogę zabrać, żeby nie wypchnąć z paska cudzej ikony”. Budżetem jest wolne miejsce przed
+najbardziej lewą cudzą ikoną; jego miarę aplikacja bierze raz na pół godziny, schodząc na
+najkrótszy szczebel i czekając, aż wypchnięte ikony wrócą. Gdy mimo to któraś zniknie, linia
+schodzi o szczebel niżej. Bez tego element zjadał pasek do zegara — to jest ten sam objaw,
+tylko przeniesiony na sąsiadów.
+
+Na ciasnej belce laptopa może się okazać, że wolnego miejsca nie ma wcale — wtedy każdy punkt
+linii kosztuje jedną cudzą ikonę. Wyboru za użytkownika nie da się tu zrobić: albo w pasku
+jest procent, albo jest ta ikona.
 
 Na ten jeden przypadek jest ostatnie zabezpieczenie: gdy pasek odrzuci nawet sam znak,
 pojawia się **ikona w Docku** z procentem okna 5 h tej aplikacji, która jest najbliżej ściany,

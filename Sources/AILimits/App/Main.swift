@@ -11,7 +11,9 @@ enum Main {
         if arguments.first?.hasPrefix("--") == true {
             exit(CommandLineTool.run(arguments))
         }
-        AILimitsApp.main()
+        let delegate = AppDelegate()
+        NSApplication.shared.delegate = delegate
+        NSApplication.shared.run()
     }
 }
 

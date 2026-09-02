@@ -7,7 +7,6 @@ import SwiftUI
 /// a decision now lives in the detail window. Nothing here is below 11 pt.
 struct PopoverView: View {
     @EnvironmentObject private var model: AppModel
-    @Environment(\.openWindow) private var openWindow
     @State private var showBarSettings = false
 
     var body: some View {
@@ -48,9 +47,9 @@ struct PopoverView: View {
             .help("Co pokazywać w pasku menu")
             .popover(isPresented: $showBarSettings, arrowEdge: .bottom) { barSettings }
 
-            Button("Szczegóły…") { openWindow(id: DetailWindow.identifier) }
+            Button("Szczegóły…") { AppWindows.showDetail() }
                 .font(.system(size: 12))
-            Button("OpenRouter…") { openWindow(id: SettingsWindow.identifier) }
+            Button("OpenRouter…") { AppWindows.showSettings() }
                 .font(.system(size: 12))
                 .help("Klucz OpenRoutera — realny koszt Harnessa")
             Button {
@@ -117,7 +116,6 @@ struct PopoverView: View {
 /// One app: limits with a verdict, then what ate them.
 struct AppSection: View {
     @EnvironmentObject private var model: AppModel
-    @Environment(\.openWindow) private var openWindow
     let app: AppKind
 
     private var snapshot: LimitsSnapshot? { model.snapshots[app] }
@@ -258,7 +256,7 @@ struct AppSection: View {
             }
             if threads.count > 4 {
                 Button("jeszcze \(threads.count - 4) — pokaż wszystkie") {
-                    openWindow(id: DetailWindow.identifier)
+                    AppWindows.showDetail()
                 }
                 .buttonStyle(.link)
                 .font(.system(size: 11))

@@ -36,7 +36,7 @@ final class MenuBarFit {
     /// picks one that vanishes. Not re-derived at runtime from a title that may
     /// have been measured mid-render; `diagnostics` prints the live delta, so a
     /// future macOS changing this shows up in the trace.
-    private static let padding: CGFloat = 37
+    private static let padding: CGFloat = StatusItem.margin
     /// Only climb back to a longer rung when it fits with room to spare, so a
     /// percentage ticking between 9 % and 10 % cannot flip the line every tick.
     private static let slack: CGFloat = 16
@@ -44,7 +44,7 @@ final class MenuBarFit {
     /// title change, short enough that walking the whole ladder is invisible.
     private static let settleDelay: TimeInterval = 0.25
 
-    private static let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+    private static let font = StatusItem.font
 
     /// Step-by-step record of a fitting pass, under `AILIMITS_TRACE` — the only
     /// way to see why a line ended up on the rung it did, since every decision
@@ -79,6 +79,19 @@ final class MenuBarFit {
         /// spares the user watching the line grow one rung at a time every time
         /// they come back to that display — it starts from what worked last.
         var bestIndex: Int?
+        /// Ile punktów paska zajmują cudze ikony, gdy wszystkie się mieszczą.
+        /// Maksimum z obserwacji: linia dłuższa od budżetu spycha sąsiadów za
+        /// krawędź, więc bieżąca suma bywa zaniżona — a wtedy budżet rósłby
+        /// sam z siebie i element zjadałby pasek do końca. Dokładnie to zrobił
+        /// przy pierwszym podejściu: została nasza linia, zegar i Centrum
+        /// sterowania.
+        var neighbours: CGFloat?
+        /// Ile cudzych ikon mieści się na tej belce, gdy nikt nie wypadł.
+        /// Sama szerokość nie wystarcza jako kryterium: moduły iStata zmieniają
+        /// szerokość razem z liczbami, więc suma faluje o kilkadziesiąt punktów
+        /// i pomiar potrafi być zaniżony. Liczba ikon nie faluje wcale — jeśli
+        /// spadła, to znaczy, że nasza linia kogoś zepchnęła.
+        var items: Int?
         var stamp = Date()
     }
     /// Po jednej lekcji na belkę. Jedna wspólna znaczyła, że nauka na ekranie
@@ -146,6 +159,26 @@ final class MenuBarFit {
                 return
             }
             var index = self.currentIndex
+            // Ile miejsca zajmują cudze ikony, gdy wszystkie się mieszczą. Da
+            // się to zmierzyć tylko wtedy, gdy nasza linia niczego nie wypchnęła
+            // — więc raz na lekcję schodzimy na najkrótszy szczebel, liczymy i
+            // wracamy. Jedno mrugnięcie na pół godziny zamiast paska zjedzonego
+            // do zegara.
+            if self.neighbours(for: window) == nil {
+                let shortest = variants.count - 1
+                if index != shortest {
+                    apply(variants[shortest])
+                    self.currentIndex = shortest
+                    index = shortest
+                    guard let settled = await self.settledFrame(of: window) else { return }
+                    slot = settled
+                }
+                if let measured = await self.settledNeighbourWidth(around: window) {
+                    self.learnNeighbours(window: window, width: measured)
+                    self.trace(String(format: "sąsiedzi: %.0f pt, %d ikon", measured,
+                                      self.itemCount(around: window) ?? -1))
+                }
+            }
             self.trace(String(format: "start: szczebel %d, budżet %@, belka %@", index,
                               self.budget(for: window).map { String(format: "%.0f", $0) }
                                 ?? "nieznany",
@@ -186,11 +219,29 @@ final class MenuBarFit {
                     self.trace("szczebel \(index): pasek nic nie rysuje — nie oceniam")
                     return
                 }
-                self.trace(String(format: "szczebel %d slot %.0f…%.0f  rysowany=%@",
-                                  index, slot.minX, slot.maxX, drawn ? "tak" : "nie"))
-                if drawn {
+                let crowded = drawn && self.crowded(around: window)
+                self.trace(String(format: "szczebel %d slot %.0f…%.0f  rysowany=%@%@",
+                                  index, slot.minX, slot.maxX, drawn ? "tak" : "nie",
+                                  crowded ? "  (sąsiad wypadł)" : ""))
+                if crowded {
+                    // Nas widać, więc ikona w Docku jest niepotrzebna — ale
+                    // linia zepchnęła z paska czyjąś ikonę, a to jest ta sama
+                    // szkoda, przed którą ta klasa broni nas samych. Krok w dół.
+                    self.onHidden?(false)
+                    ceiling = index + 1
+                    guard index < variants.count - 1 else {
+                        // Najkrótszy szczebel i nadal ciasno: krócej się nie da,
+                        // a zniknięcie własnej linii niczego by nie naprawiło.
+                        self.learn(window: window, minX: slot.minX, rendered: true, index: index)
+                        return
+                    }
+                    index += 1
+                } else if drawn {
                     self.learn(window: window, minX: slot.minX, rendered: true, index: index)
                     self.onHidden?(false)
+                    if let measured = self.neighbourWidth(around: window) {
+                        self.learnNeighbours(window: window, width: measured)
+                    }
                     // On a screen with no notch there is no edge to compute a
                     // budget from, so the only way to find out whether a longer
                     // line would still be drawn is to try one. Without this the
@@ -299,6 +350,38 @@ final class MenuBarFit {
         lessons[signature(screen)] = updated
     }
 
+    /// Czy na belce jest teraz mniej ikon, niż potrafiła pomieścić.
+    private func crowded(around window: NSWindow) -> Bool {
+        guard let screen = barScreen(for: window),
+              let remembered = lesson(for: screen)?.items,
+              let now = itemCount(around: window) else { return false }
+        return now < remembered
+    }
+
+    /// Ile elementów rysuje ta belka w tej chwili — z naszym włącznie.
+    private func itemCount(around window: NSWindow) -> Int? {
+        guard let screen = barScreen(for: window) else { return nil }
+        let items = barItems(on: screen)
+        return items.isEmpty ? nil : items.count
+    }
+
+    /// Zapamiętane miejsce zajmowane przez cudze ikony na tej belce.
+    private func neighbours(for window: NSWindow) -> CGFloat? {
+        guard let screen = barScreen(for: window) else { return nil }
+        return lesson(for: screen)?.neighbours
+    }
+
+    /// Maksimum z obserwacji — patrz komentarz przy `Lesson.neighbours`.
+    private func learnNeighbours(window: NSWindow, width: CGFloat) {
+        guard let screen = barScreen(for: window) else { return }
+        var updated = lesson(for: screen) ?? Lesson()
+        updated.neighbours = max(updated.neighbours ?? width, width)
+        if let count = itemCount(around: window) {
+            updated.items = max(updated.items ?? count, count)
+        }
+        lessons[signature(screen)] = updated
+    }
+
     /// The rung this bar last managed to draw, if it is still worth trusting.
     private func rememberedIndex(for window: NSWindow) -> Int? {
         guard let screen = barScreen(for: window) else { return nil }
@@ -327,11 +410,89 @@ final class MenuBarFit {
 
     /// The same question for one particular copy of the item — the bar a
     /// fitting pass has committed to.
+    ///
+    /// Odkąd element ma zapisaną pozycję (patrz `StatusItem`), nie stoi już na
+    /// skrajnie lewym miejscu w grupie, tylko między ikonami innych aplikacji.
+    /// To zmienia pytanie: nie „czy zmieszczę się między krawędzią a sobą”,
+    /// tylko „ile mogę zabrać, żeby sąsiedzi z lewej nie wypadli z paska”.
+    /// Każdy punkt naszej szerokości spycha ich w lewo o tyle samo, więc
+    /// budżetem jest wolne miejsce przed najbardziej lewą cudzą ikoną plus to,
+    /// co sami w tej chwili zajmujemy.
+    ///
+    /// Bez tego element rysowałby się zawsze — kosztem ikon iStata, które
+    /// znikałyby po kolei. To był pierwotny objaw, od którego zaczęła się cała
+    /// ta klasa, tyle że przeniesiony na sąsiadów.
     func budget(for window: NSWindow) -> CGFloat? {
         guard let screen = barScreen(for: window),
-              let edge = drawableEdge(screen: screen)
+              let edge = drawableEdge(screen: screen),
+              let neighbours = lesson(for: screen)?.neighbours
         else { return nil }
-        return window.frame.maxX - edge - Self.slack
+        // `slack` nie jest tu ostrożnością na wszelki wypadek: moduły iStata
+        // zmieniają szerokość razem z liczbami w środku (samo „8 KB/s” kontra
+        // „1,0 MB/s” to kilkanaście punktów). Bez zapasu linia dobrana co do
+        // punktu spycha sąsiada z paska przy pierwszej takiej zmianie.
+        return screen.frame.maxX - edge - neighbours - Self.slack
+    }
+
+    /// To samo, ale z kilku próbek. Dwa powody, oba zmierzone: po zmianie
+    /// naszej szerokości sąsiedzi przesuwają się z opóźnieniem, a ikony iStata
+    /// same zmieniają szerokość co sekundę, gdy zmienia się liczba w środku.
+    /// Zaniżony pomiar to zawyżony budżet, a zawyżony budżet to zepchnięte z
+    /// paska cudze ikony — czyli dokładnie to, czego ta klasa ma nie robić.
+    private func settledNeighbourWidth(around window: NSWindow) async -> CGFloat? {
+        var best: CGFloat?
+        var quiet = 0
+        // Cierpliwość mierzona, nie zgadnięta: ikona zepchnięta z paska przez
+        // pełną linię wracała tu nawet po dwóch sekundach, a pomiar zrobiony
+        // wcześniej zaniżał budżet o całą jej szerokość i cały mechanizm
+        // „nikogo nie spychamy” przestawał działać. Sześć sekund raz na pół
+        // godziny, w tle, przy najkrótszym szczeblu.
+        for _ in 0..<24 {
+            if let sample = neighbourWidth(around: window) {
+                let grown = sample > (best ?? 0)
+                best = max(best ?? sample, sample)
+                quiet = grown ? 0 : quiet + 1
+                // Ikony wypchnięte przez zbyt długą linię wracają dopiero po
+                // chwili, więc suma przez pierwszą sekundę tylko rośnie.
+                // Kończymy, gdy przestała.
+                if quiet >= 8 { return best }
+            }
+            try? await Task.sleep(nanoseconds: UInt64(Self.settleDelay * 1_000_000_000))
+            guard !Task.isCancelled else { return best }
+        }
+        return best
+    }
+
+    /// Suma szerokości cudzych ikon w tej belce, teraz. Nasza własna wypada z
+    /// sumy po pozycji slotu.
+    private func neighbourWidth(around window: NSWindow) -> CGFloat? {
+        guard let screen = barScreen(for: window) else { return nil }
+        let items = barItems(on: screen)
+        guard !items.isEmpty else { return nil }
+        let slot = window.frame
+        return items.filter { abs($0.minX - slot.minX) >= 2 }.reduce(0) { $0 + $1.width }
+    }
+
+    /// Prostokąty wszystkich elementów paska na tym ekranie, tak jak widzi je
+    /// window server — nasz włącznie, o ile jest rysowany.
+    private func barItems(on screen: NSScreen) -> [CGRect] {
+        guard let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero })
+                ?? NSScreen.screens.first else { return [] }
+        // Core Graphics liczy y w dół od góry ekranu z AppKitowym (0, 0),
+        // AppKit w górę od jego dołu.
+        let barY = primary.frame.maxY - screen.frame.maxY
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
+        return list.compactMap { info in
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer >= 24, layer < 100,
+                  let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = bounds["X"], let y = bounds["Y"], let width = bounds["Width"],
+                  abs(y - barY) < 4,
+                  // Tło samego paska ciągnie się przez cały ekran i nie jest
+                  // elementem; żaden element nie zbliża się do tej szerokości.
+                  width < screen.frame.width - 1 else { return nil }
+            return CGRect(x: x, y: y, width: width, height: 1)
+        }
     }
 
     /// The leftmost x an item's slot may start at and still be drawn.
@@ -504,26 +665,8 @@ final class MenuBarFit {
     /// when the bar it lives on is not drawing at all — hidden under a
     /// full-screen app, say — which says nothing either way.
     private func isOnScreen(_ window: NSWindow) -> Bool? {
-        guard let screen = barScreen(for: window),
-              let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero })
-                ?? NSScreen.screens.first
-        else { return nil }
-        // Core Graphics counts y downwards from the top of the screen whose
-        // AppKit origin is (0, 0), AppKit upwards from its bottom — this is
-        // where our bar's items are in the first coordinate space.
-        let barY = primary.frame.maxY - screen.frame.maxY
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
-        let items = list.compactMap { info -> CGRect? in
-            guard let layer = info[kCGWindowLayer as String] as? Int, layer >= 24, layer < 100,
-                  let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
-                  let x = bounds["X"], let y = bounds["Y"], let width = bounds["Width"],
-                  abs(y - barY) < 4,
-                  // The bar's own backdrop spans the whole screen and is not
-                  // an item; a status item never comes close to that width.
-                  width < screen.frame.width - 1 else { return nil }
-            return CGRect(x: x, y: y, width: width, height: 1)
-        }
+        guard let screen = barScreen(for: window) else { return nil }
+        let items = barItems(on: screen)
         // A bar drawing nothing at all says nothing about whether this item
         // fits, and must not be read as "you are too wide".
         guard !items.isEmpty else { return nil }

@@ -3,6 +3,7 @@ import SwiftUI
 /// Ustawienia OpenRoutera: management key + wybór klucza Harnessa.
 struct SettingsWindow: View {
     static let identifier = "ailimits-settings"
+    static let title = "Ustawienia — OpenRouter"
 
     @EnvironmentObject private var model: AppModel
     @State private var keyInput = ""
