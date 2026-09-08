@@ -172,7 +172,6 @@ final class AppModel: ObservableObject {
     private var lastLimitsFetch: Date?
     private var openRouterTask: Task<Void, Never>?
     private var screenObserver: (any NSObjectProtocol)?
-    private var activationObserver: (any NSObjectProtocol)?
 
     init() {
         do {
@@ -249,10 +248,6 @@ final class AppModel: ObservableObject {
         loop = nil
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
-        if let activationObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
-        }
-        activationObserver = nil
     }
 
     /// Plugging in an external display moves the item to a different bar with a
@@ -260,11 +255,11 @@ final class AppModel: ObservableObject {
     /// measurable left edge at all. Everything the fitter concluded about the
     /// old bar stops being true at that instant.
     ///
-    /// Switching apps matters for the same reason without changing anything
-    /// about the screens: the menu bar follows the active window to another
-    /// display, and the item goes with it. Without this the line would keep the
-    /// length it needed on the cramped built-in bar for up to a whole tick
-    /// after moving to a roomy external one.
+    /// Przełączanie aplikacji między ekranami celowo nie jest tu obserwowane.
+    /// Było — i każde przełączenie zmieniało, która belka decyduje o długości,
+    /// więc linia na monitorze zwijała się i rozwijała przy każdym kliknięciu.
+    /// Odkąd decyduje zawsze belka z największym zapasem (patrz
+    /// `MenuBarFit.governingWindow`), focus nie ma na długość żadnego wpływu.
     private func watchScreenChanges() {
         guard screenObserver == nil else { return }
         screenObserver = NotificationCenter.default.addObserver(
@@ -272,21 +267,6 @@ final class AppModel: ObservableObject {
             object: nil, queue: .main) { _ in
                 Task { @MainActor [weak self] in
                     self?.fit.reset()
-                    self?.rebuildTitle()
-                }
-            }
-        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification,
-            object: nil, queue: .main) { _ in
-                Task { @MainActor [weak self] in
-                    // Tylko gdy pasek naprawdę przeniósł się na inny ekran.
-                    // Przełączenie aplikacji w obrębie jednego ekranu nie
-                    // zmienia dla dopasowania nic, a przeliczenie przerywa
-                    // trwający pomiar sąsiadów — przy otwieraniu okien
-                    // terminala takich przełączeń jest kilka pod rząd i linia
-                    // nigdy nie dochodziła do końca, tylko w kółko rozwijała
-                    // się i kurczyła.
-                    guard self?.fit.barMoved() == true else { return }
                     self?.rebuildTitle()
                 }
             }

@@ -128,8 +128,6 @@ final class MenuBarFit {
     /// wbudowanym kasowała wszystko, czego aplikacja dowiedziała się o
     /// zewnętrznym — a przy dwóch ekranach obie belki żyją równolegle.
     private var lessons: [String: Lesson] = [:]
-    /// Ekran, na którym była belka, gdy ostatnio o to pytano — patrz `barMoved`.
-    private var lastActiveSignature: String?
 
     private func signature(_ screen: NSScreen) -> String {
         "\(Int(screen.frame.minX))x\(Int(screen.frame.width))"
@@ -197,7 +195,7 @@ final class MenuBarFit {
         // jakimkolwiek pomiarem. Bez tego linia po przeniesieniu na ciaśniejszy
         // ekran pokazuje się na pełno i dopiero po chwili kurczy w oczach:
         // dokładnie ten objaw, o który poszło.
-        if let screen = activeScreen() {
+        if let screen = governingScreen(minimumWidth: width(of: variants[variants.count - 1])) {
             var start = lesson(for: screen)?.bestIndex ?? currentIndex
             // …ale nigdy dłuższy, niż pozwala budżet tej belki. Sam pamiętany
             // szczebel bywa optymistyczny (pochodzi z chwili, gdy sąsiadów było
@@ -782,18 +780,6 @@ final class MenuBarFit {
         return NSScreen.screens.first { $0.frame.contains(centre) } ?? pointerScreen()
     }
 
-    /// Czy od ostatniego pytania pasek menu przeniósł się na inny ekran.
-    ///
-    /// Przełączenie aplikacji w obrębie jednego ekranu nie zmienia dla
-    /// dopasowania nic, a wywołane wtedy przeliczenie przerywało trwający
-    /// pomiar. Przy otwieraniu okien terminala takich przełączeń jest kilka
-    /// pod rząd i to wystarczało, żeby linia nigdy nie doszła do końca.
-    func barMoved() -> Bool {
-        let now = activeScreen().map(signature)
-        defer { lastActiveSignature = now }
-        return now != lastActiveSignature
-    }
-
     private func pointerScreen() -> NSScreen? {
         let pointer = NSEvent.mouseLocation
         return NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main
@@ -851,46 +837,31 @@ final class MenuBarFit {
     /// The copy a fitting pass has to satisfy. One title serves every bar, so
     /// with two displays one of them decides the length.
     ///
-    /// The bar the user is looking at decides, and nothing else — the built-in
-    /// bar here has about sixty points between the notch and the next icon, and
-    /// letting it set the length meant `27% …` on a 1920-point external display
-    /// with half its bar empty. The display nobody is looking at does not get
-    /// to dictate what the display in use shows.
+    /// Belka z największym zapasem miejsca — i nic więcej. Nie ta, na którą
+    /// użytkownik patrzy: tytuł jest jeden dla obu belek, więc gdy decydował
+    /// ciasny pasek laptopa (bo tam było okno na wierzchu), monitor z połową
+    /// belki wolnej dostawał to samo `41%`. A każde przełączenie aplikacji
+    /// między ekranami zmieniało decyzję, więc linia na monitorze zwijała się
+    /// i rozwijała przy każdym kliknięciu. Focus nie ma tu nic do rzeczy:
+    /// ekran, na którym jest miejsce, pokazuje wszystko, zawsze; ekran, na
+    /// którym go nie ma, pokazuje to, co się zmieści — a jak nic, to nic, bo
+    /// tego macOS nie negocjuje.
     ///
-    /// Which display that is comes from the frontmost app's own window. Not
-    /// `NSScreen.main` — "main" is the screen holding *this* process's key
-    /// window, and a menu bar app never has one, so it answered "built-in" no
-    /// matter where the user actually was. Not the pointer either: it can sit
-    /// parked on the laptop screen for an hour while all the work happens on
-    /// the external one.
-    ///
-    /// The active bar only gets the vote if it can draw the item at all. When
-    /// it cannot — the built-in bar here is so crowded that its slot ends left
-    /// of the notch, where nothing is ever drawn — it shows nothing whatever
-    /// the line says, so letting it shorten the line would cost the other
-    /// display its numbers and buy nothing.
-    ///
-    /// Falling back further: the tightest bar that can still draw the item, and
-    /// only if none can, the roomiest one.
+    /// Belka, która udowodniła, że nie narysuje nic, nie bierze udziału.
+    /// Nieznany budżet (ekran bez wcięcia, jeszcze nie sondowany) liczy się
+    /// jako przestronny — sondowanie to skoryguje.
     func governingWindow(minimumWidth: CGFloat) -> NSWindow? {
         let candidates = statusWindows()
         guard candidates.count > 1 else { return candidates.first }
-        // An unknown budget (a screen with no notch and nothing learned yet)
-        // counts as roomy; probing corrects it if it is not.
         let unlimited = CGFloat.greatestFiniteMagnitude
         let scored = candidates.map { ($0, budget(for: $0) ?? unlimited) }
-        if let active = activeScreen(),
-           let onActive = scored.first(where: {
-               abs($0.0.frame.maxY - active.frame.maxY) < 2
-                   && $0.1 >= minimumWidth && !isImpossible($0.0)
-           }) {
-            return onActive.0
-        }
-        if let tightest = scored.filter({ $0.1 >= minimumWidth && !isImpossible($0.0) })
-            .min(by: { $0.1 < $1.1 }) {
-            return tightest.0
-        }
-        return scored.max(by: { $0.1 < $1.1 })?.0
+        let possible = scored.filter { !isImpossible($0.0) }
+        return (possible.isEmpty ? scored : possible).max(by: { $0.1 < $1.1 })?.0
+    }
+
+    /// Ekran belki, która decyduje o długości — patrz `governingWindow`.
+    func governingScreen(minimumWidth: CGFloat) -> NSScreen? {
+        governingWindow(minimumWidth: minimumWidth).flatMap(barScreen)
     }
 
     /// Whether the item is on screen right now, or nil when there is nothing to
