@@ -117,6 +117,11 @@ final class MenuBarFit {
         /// jest twardą liczbą i wystarcza, żeby następnym razem wybrać szczebel
         /// od razu, zamiast wspinać się po jednym aż do awarii.
         var refusedWidth: CGFloat?
+        /// Kiedy ta belka ostatnio kazała nam się skrócić. Per belka, bo
+        /// globalnie znaczyło to, że ciasny pasek laptopa uciszał wydłużanie na
+        /// monitorze, który ma pół belki wolnej — i po powrocie na monitor
+        /// zostawał sam znak zamiast całej linii.
+        var shrunkAt: Date?
         var stamp = Date()
     }
     /// Po jednej lekcji na belkę. Jedna wspólna znaczyła, że nauka na ekranie
@@ -167,8 +172,6 @@ final class MenuBarFit {
     }
     /// Which rung was last handed out — where the fitting pass starts.
     private var currentIndex = 0
-    /// Kiedy pasek ostatnio kazał nam się skrócić — patrz `growCooldown`.
-    private var lastShrink = Date.distantPast
 
     /// Zgłasza wynik przebiegu jednym faktem: czy pasek menu odmówił nawet
     /// najkrótszego szczebla. `true` znaczy, że przez pasek nie da się już
@@ -297,8 +300,13 @@ final class MenuBarFit {
             // wypadek” kosztował widoczne rozwinięcie i zwijanie linii przy
             // każdym przebiegu, a nie kupował nic: sondowanie w górę i tak
             // dochodzi tam, gdzie jest miejsce.
+            // Podłoga: budżet policzony z ciasnoty (a nie z tego, że element
+            // znika) nie ma prawa zbić linii do gołego znaku. Poniżej schodzi
+            // się tylko wtedy, gdy pasek naprawdę nic nie narysował — to robi
+            // gałąź „nie narysowany” niżej.
+            let floorIndex = max(0, variants.count - 2)
             let wanted = min(wantedByBudget ?? self.rememberedIndex(for: window) ?? index,
-                             variants.count - 1)
+                             floorIndex)
             if wanted != index {
                 index = wanted
                 self.currentIndex = index
@@ -340,7 +348,10 @@ final class MenuBarFit {
                     // szkoda, przed którą ta klasa broni nas samych.
                     self.onHidden?(false)
                     ceiling = index + 1
-                    guard index < variants.count - 1 else {
+                    // Ta sama podłoga, co przy wyborze z budżetu: cudza ikona
+                    // kosztem procentu — tak; procent kosztem cudzej ikony —
+                    // dopiero gdy element nie rysuje się w ogóle.
+                    guard index < floorIndex else {
                         // Najkrótszy szczebel i nadal ciasno: krócej się nie da,
                         // a zniknięcie własnej linii niczego by nie naprawiło.
                         // Skoro przy najkrótszej wersji ikon jest mniej, to nie
@@ -358,12 +369,10 @@ final class MenuBarFit {
                     // krok to widoczny skok w pasku, a znamy już cel.
                     self.learnRefused(window: window, width: self.width(of: variants[index]),
                                       index: index)
-                    self.lastShrink = Date()
                     let target = self.budget(for: window).map { budget in
-                        variants.firstIndex { self.width(of: $0) <= budget }
-                            ?? (variants.count - 1)
+                        variants.firstIndex { self.width(of: $0) <= budget } ?? floorIndex
                     } ?? (index + 1)
-                    index = min(max(target, index + 1), variants.count - 1)
+                    index = min(max(target, index + 1), floorIndex)
                 } else if drawn {
                     self.learn(window: window, minX: slot.minX, rendered: true, index: index)
                     self.onHidden?(false)
@@ -381,7 +390,8 @@ final class MenuBarFit {
                     // `growCooldown`. Ten ostatni warunek jest tu po to, żeby
                     // pasek stał, a nie oddychał.
                     guard self.budget(for: window) == nil, index - 1 >= ceiling,
-                          Date().timeIntervalSince(self.lastShrink) >= Self.growCooldown
+                          Date().timeIntervalSince(self.shrunkAt(for: window) ?? .distantPast)
+                            >= Self.growCooldown
                     else { return }
                     index -= 1
                 } else {
@@ -391,7 +401,6 @@ final class MenuBarFit {
                     if !shortest {
                         self.learnRefused(window: window, width: self.width(of: variants[index]),
                                           index: index)
-                        self.lastShrink = Date()
                     }
                     ceiling = index + 1
                     guard !shortest else {
@@ -547,6 +556,7 @@ final class MenuBarFit {
         updated.refusedWidth = min(updated.refusedWidth ?? width, width)
         updated.bestIndex = max(updated.bestIndex ?? (index + 1), index + 1)
         updated.ceiling = max(updated.ceiling ?? (index + 1), index + 1)
+        updated.shrunkAt = Date()
         updated.stamp = Date()
         lessons[signature(screen)] = updated
     }
@@ -572,6 +582,12 @@ final class MenuBarFit {
             updated.items = max(updated.items ?? count, count)
         }
         lessons[signature(screen)] = updated
+    }
+
+    /// Kiedy ta belka ostatnio kazała nam się skrócić — patrz `growCooldown`.
+    private func shrunkAt(for window: NSWindow) -> Date? {
+        guard let screen = barScreen(for: window) else { return nil }
+        return lesson(for: screen)?.shrunkAt
     }
 
     /// Najdłuższy szczebel, jaki wolno na tej belce próbować — patrz
