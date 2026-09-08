@@ -126,11 +126,16 @@ final class MenuBarFit {
     private var verification: Task<Void, Never>?
     /// Warianty, nad którymi pracuje trwający przebieg — patrz `verify`.
     private var running: [String]?
+    /// Numer przebiegu. Po samej liście wariantów nie da się ich rozróżnić:
+    /// przebieg, który przerzuca się na drugą belkę, woła `verify` z tą samą
+    /// listą, więc porównanie przez równość kazałoby pierwszemu posprzątać po
+    /// drugim — i zostałby przebieg, którego nikt już nie potrafi przerwać.
+    private var generation = 0
 
     /// Przebieg się skończył (sam albo przerwany). Sprząta po sobie tylko
     /// wtedy, gdy w międzyczasie nikt nie zdążył zacząć nowego.
-    private func finished(_ variants: [String]) {
-        guard running == variants else { return }
+    private func finished(_ generation: Int) {
+        guard self.generation == generation else { return }
         running = nil
         verification = nil
     }
@@ -180,13 +185,21 @@ final class MenuBarFit {
         // 30 s, plus zdarzeniach z zewnątrz, nigdy nie dobiegał końca. Nie
         // dobiegał — więc `neighbours` zostawało puste, więc nie było budżetu,
         // więc następny przebieg znowu zaczynał od zera.
-        if let running, running == variants, let task = verification, !task.isCancelled {
+        //
+        // Tylko dla wywołań z zewnątrz: przerzucenie się na drugą belkę
+        // (`attempt: 1`) woła to z tą samą listą, w środku trwającego
+        // przebiegu, i musi przejść — inaczej belka, która nie narysuje nic,
+        // nigdy nie oddałaby głosu drugiej ani nie zapaliła ikony w Docku.
+        if attempt == 0, let running, running == variants,
+           let task = verification, !task.isCancelled {
             return
         }
         verification?.cancel()
+        generation += 1
+        let generation = self.generation
         running = variants
         verification = Task { @MainActor [weak self] in
-            defer { self?.finished(variants) }
+            defer { self?.finished(generation) }
             // One copy of the item is chosen for the whole pass and never
             // re-resolved. Re-asking every sample let the choice alternate
             // between the two bars' copies, whose frames differ — so the frame
