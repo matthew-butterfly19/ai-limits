@@ -40,6 +40,18 @@ final class MenuBarFit {
     /// Only climb back to a longer rung when it fits with room to spare, so a
     /// percentage ticking between 9 % and 10 % cannot flip the line every tick.
     private static let slack: CGFloat = 16
+    /// Ile musi minąć od skrócenia linii, zanim wolno jej znowu próbować się
+    /// wydłużyć.
+    ///
+    /// Skracanie jest natychmiastowe — bo alternatywą jest zniknięty element
+    /// albo zepchnięta cudza ikona. Wydłużanie nie ma takiego usprawiedliwienia:
+    /// zysk jest kosmetyczny, a koszt to przesunięcie całego paska. Bez tego
+    /// progu belka, na której nasza szerokość wypada dokładnie na granicy,
+    /// wydłużała się i skracała w kółko co kilka sekund: wydłuż się, zepchnij
+    /// ikonę, skróć się, ikona wraca, wydłuż się. Pierwsza wspinaczka po starcie
+    /// nie jest tym objęta — nic jeszcze nie skróciło linii, więc nie ma czego
+    /// wyciszać.
+    private static let growCooldown: TimeInterval = 300
     /// Long enough for the status item to have been laid out and drawn after a
     /// title change, short enough that walking the whole ladder is invisible.
     private static let settleDelay: TimeInterval = 0.25
@@ -92,6 +104,19 @@ final class MenuBarFit {
         /// i pomiar potrafi być zaniżony. Liczba ikon nie faluje wcale — jeśli
         /// spadła, to znaczy, że nasza linia kogoś zepchnęła.
         var items: Int?
+        /// Najkrótszy szczebel, którego ta belka nie przyjęła bez szkody dla
+        /// sąsiadów — czyli sufit dla sondowania w górę. W odróżnieniu od
+        /// `bestIndex` nie obniża się po sukcesie i nie przedawnia: skoro raz
+        /// zobaczyliśmy, że przy tej długości komuś ubyło ikony, nie ma powodu
+        /// sprawdzać tego co pół godziny od nowa. To jest jedyna rzecz, która
+        /// naprawdę kończy oddychanie paska.
+        var ceiling: Int?
+        /// Najwęższa linia, przy której belka odmówiła albo zepchnęła sąsiada.
+        /// Na ekranie bez wcięcia to jedyny sposób, żeby w ogóle mieć budżet:
+        /// krawędzi menu nie da się odczytać, ale „przy 690 pt ikony wypadły”
+        /// jest twardą liczbą i wystarcza, żeby następnym razem wybrać szczebel
+        /// od razu, zamiast wspinać się po jednym aż do awarii.
+        var refusedWidth: CGFloat?
         var stamp = Date()
     }
     /// Po jednej lekcji na belkę. Jedna wspólna znaczyła, że nauka na ekranie
@@ -119,6 +144,7 @@ final class MenuBarFit {
         if Date().timeIntervalSince(lesson.stamp) >= Self.lessonLifetime {
             lesson.hiddenAt = nil
             lesson.impossible = false
+            lesson.refusedWidth = nil
         }
         return lesson
     }
@@ -141,6 +167,8 @@ final class MenuBarFit {
     }
     /// Which rung was last handed out — where the fitting pass starts.
     private var currentIndex = 0
+    /// Kiedy pasek ostatnio kazał nam się skrócić — patrz `growCooldown`.
+    private var lastShrink = Date.distantPast
 
     /// Zgłasza wynik przebiegu jednym faktem: czy pasek menu odmówił nawet
     /// najkrótszego szczebla. `true` znaczy, że przez pasek nie da się już
@@ -166,8 +194,17 @@ final class MenuBarFit {
         // jakimkolwiek pomiarem. Bez tego linia po przeniesieniu na ciaśniejszy
         // ekran pokazuje się na pełno i dopiero po chwili kurczy w oczach:
         // dokładnie ten objaw, o który poszło.
-        if let screen = activeScreen(), let best = lesson(for: screen)?.bestIndex {
-            currentIndex = min(best, variants.count - 1)
+        if let screen = activeScreen() {
+            var start = lesson(for: screen)?.bestIndex ?? currentIndex
+            // …ale nigdy dłuższy, niż pozwala budżet tej belki. Sam pamiętany
+            // szczebel bywa optymistyczny (pochodzi z chwili, gdy sąsiadów było
+            // mniej), a wtedy każde odświeżenie zaczynało od zbyt długiej linii
+            // i skracało ją w oczach.
+            if let budget = budget(on: screen) {
+                start = max(start, variants.firstIndex { width(of: $0) <= budget }
+                                    ?? (variants.count - 1))
+            }
+            currentIndex = min(start, variants.count - 1)
         }
         let immediate = variants[min(currentIndex, variants.count - 1)]
         verify(variants, apply: apply)
@@ -270,32 +307,63 @@ final class MenuBarFit {
                 slot = settled
             }
 
+            // Belka, na której ten przebieg się zaczął. Gdy element w trakcie
+            // przeniesie się na drugą (użytkownik przełączył ekran), wszystkie
+            // pomiary z tej chwili opisują już co innego — a nauka z nich
+            // trafiłaby do lekcji niewłaściwego ekranu.
+            let barAtStart = self.barScreen(for: window).map(self.signature)
+
             /// The longest rung still allowed. A refused probe raises it, and
             /// that is what stops the pass from oscillating between a rung that
-            /// draws and the next one up that does not.
-            var ceiling = 0
+            /// draws and the next one up that does not. Zaczyna od tego, czego
+            /// ta belka nauczyła się wcześniej — inaczej każdy przebieg
+            /// sprawdzałby od nowa szczebel, o którym już wiadomo, że spycha
+            /// komuś ikonę z paska.
+            var ceiling = self.ceiling(for: window) ?? 0
             while !Task.isCancelled {
+                guard self.barScreen(for: window).map(self.signature) == barAtStart else {
+                    self.trace("element przeniósł się na inną belkę — przebieg porzucony")
+                    return
+                }
                 guard let drawn = await self.isDrawn(window) else {
                     self.trace("szczebel \(index): pasek nic nie rysuje — nie oceniam")
                     return
                 }
-                let crowded = drawn && self.crowded(around: window)
+                var crowded = false
+                if drawn { crowded = await self.settledCrowded(around: window) }
                 self.trace(String(format: "szczebel %d slot %.0f…%.0f  rysowany=%@%@",
                                   index, slot.minX, slot.maxX, drawn ? "tak" : "nie",
                                   crowded ? "  (sąsiad wypadł)" : ""))
                 if crowded {
                     // Nas widać, więc ikona w Docku jest niepotrzebna — ale
                     // linia zepchnęła z paska czyjąś ikonę, a to jest ta sama
-                    // szkoda, przed którą ta klasa broni nas samych. Krok w dół.
+                    // szkoda, przed którą ta klasa broni nas samych.
                     self.onHidden?(false)
                     ceiling = index + 1
                     guard index < variants.count - 1 else {
                         // Najkrótszy szczebel i nadal ciasno: krócej się nie da,
                         // a zniknięcie własnej linii niczego by nie naprawiło.
+                        // Skoro przy najkrótszej wersji ikon jest mniej, to nie
+                        // przez nas — więc to nowa prawda o tej belce, a nie
+                        // powód do skracania. Bez tej korekty jedna ikona, która
+                        // mignęła raz w pasku, zostawałaby w pamięci na zawsze i
+                        // od tej chwili każdy pomiar wyglądałby na ciasnotę.
+                        self.relearnItems(window: window)
                         self.learn(window: window, minX: slot.minX, rendered: true, index: index)
                         return
                     }
-                    index += 1
+                    // Ta szerokość jest za duża — i to jest liczba, która robi
+                    // z tej belki belkę z budżetem. Schodzimy od razu tam, gdzie
+                    // budżet pozwala, zamiast po jednym szczeblu w dół: każdy
+                    // krok to widoczny skok w pasku, a znamy już cel.
+                    self.learnRefused(window: window, width: self.width(of: variants[index]),
+                                      index: index)
+                    self.lastShrink = Date()
+                    let target = self.budget(for: window).map { budget in
+                        variants.firstIndex { self.width(of: $0) <= budget }
+                            ?? (variants.count - 1)
+                    } ?? (index + 1)
+                    index = min(max(target, index + 1), variants.count - 1)
                 } else if drawn {
                     self.learn(window: window, minX: slot.minX, rendered: true, index: index)
                     self.onHidden?(false)
@@ -307,12 +375,24 @@ final class MenuBarFit {
                     // line would still be drawn is to try one. Without this the
                     // line would keep whatever length it had to take on the
                     // cramped built-in bar for as long as it stayed running.
-                    guard self.budget(for: window) == nil, index - 1 >= ceiling else { return }
+                    // Wydłużać się wolno tylko na belce bez budżetu (nie ma jak
+                    // policzyć miejsca inaczej niż spróbować), nie powyżej
+                    // sufitu z tego przebiegu i nie częściej niż raz na
+                    // `growCooldown`. Ten ostatni warunek jest tu po to, żeby
+                    // pasek stał, a nie oddychał.
+                    guard self.budget(for: window) == nil, index - 1 >= ceiling,
+                          Date().timeIntervalSince(self.lastShrink) >= Self.growCooldown
+                    else { return }
                     index -= 1
                 } else {
                     let shortest = index == variants.count - 1
                     self.learn(window: window, minX: slot.minX, rendered: false,
                                index: index, shortest: shortest)
+                    if !shortest {
+                        self.learnRefused(window: window, width: self.width(of: variants[index]),
+                                          index: index)
+                        self.lastShrink = Date()
+                    }
                     ceiling = index + 1
                     guard !shortest else {
                         // Nothing fits on this bar at all. Now that this is
@@ -411,6 +491,32 @@ final class MenuBarFit {
         lessons[signature(screen)] = updated
     }
 
+    /// To samo pytanie, ale zadane dopiero wtedy, gdy pasek przestał się
+    /// przestawiać.
+    ///
+    /// Ikony wypchnięte przez dłuższą linię znikają z opóźnieniem, a wracają
+    /// jeszcze wolniej — do dwóch sekund. Pytanie zadane od razu po zmianie
+    /// szczebla opisuje więc szczebel poprzedni, nie ten. Dokładnie stąd brała
+    /// się wspinaczka, która przechodziła przez punkt spychania ikon i orientowała
+    /// się dopiero na samej górze, po czym zjeżdżała do najkrótszej wersji i
+    /// zaczynała od nowa — pasek skakał w kółko co kilka sekund.
+    private func settledCrowded(around window: NSWindow) async -> Bool {
+        guard let screen = barScreen(for: window),
+              let remembered = lesson(for: screen)?.items else { return false }
+        var last: Int?
+        var quiet = 0
+        for _ in 0..<12 {
+            if let now = itemCount(around: window) {
+                quiet = (now == last) ? quiet + 1 : 0
+                last = now
+                if quiet >= 3 { return now < remembered }
+            }
+            try? await Task.sleep(nanoseconds: UInt64(Self.settleDelay * 1_000_000_000))
+            guard !Task.isCancelled else { break }
+        }
+        return (last ?? remembered) < remembered
+    }
+
     /// Czy na belce jest teraz mniej ikon, niż potrafiła pomieścić.
     private func crowded(around window: NSWindow) -> Bool {
         guard let screen = barScreen(for: window),
@@ -432,6 +538,31 @@ final class MenuBarFit {
         return lesson(for: screen)?.neighbours
     }
 
+    /// Ta szerokość okazała się za duża — albo element się nie narysował, albo
+    /// zepchnął z paska cudzą ikonę. Minimum z obserwacji, i to jest odmowa,
+    /// więc odświeża znacznik czasu i przedawnia się jak każda inna.
+    private func learnRefused(window: NSWindow, width: CGFloat, index: Int) {
+        guard let screen = barScreen(for: window) else { return }
+        var updated = lesson(for: screen) ?? Lesson()
+        updated.refusedWidth = min(updated.refusedWidth ?? width, width)
+        updated.bestIndex = max(updated.bestIndex ?? (index + 1), index + 1)
+        updated.ceiling = max(updated.ceiling ?? (index + 1), index + 1)
+        updated.stamp = Date()
+        lessons[signature(screen)] = updated
+    }
+
+    /// Przyjmuje bieżącą liczbę ikon jako nową prawdę o belce — wołane tylko
+    /// wtedy, gdy nasza linia jest najkrótsza z możliwych, więc na pewno nie
+    /// jest przyczyną tego, że komuś ubyło.
+    private func relearnItems(window: NSWindow) {
+        guard let screen = barScreen(for: window), let count = itemCount(around: window) else {
+            return
+        }
+        var updated = lesson(for: screen) ?? Lesson()
+        updated.items = count
+        lessons[signature(screen)] = updated
+    }
+
     /// Maksimum z obserwacji — patrz komentarz przy `Lesson.neighbours`.
     private func learnNeighbours(window: NSWindow, width: CGFloat) {
         guard let screen = barScreen(for: window) else { return }
@@ -441,6 +572,13 @@ final class MenuBarFit {
             updated.items = max(updated.items ?? count, count)
         }
         lessons[signature(screen)] = updated
+    }
+
+    /// Najdłuższy szczebel, jaki wolno na tej belce próbować — patrz
+    /// `Lesson.ceiling`.
+    private func ceiling(for window: NSWindow) -> Int? {
+        guard let screen = barScreen(for: window) else { return nil }
+        return lesson(for: screen)?.ceiling
     }
 
     /// The rung this bar last managed to draw, if it is still worth trusting.
@@ -484,15 +622,34 @@ final class MenuBarFit {
     /// znikałyby po kolei. To był pierwotny objaw, od którego zaczęła się cała
     /// ta klasa, tyle że przeniesiony na sąsiadów.
     func budget(for window: NSWindow) -> CGFloat? {
-        guard let screen = barScreen(for: window),
-              let edge = drawableEdge(screen: screen),
-              let neighbours = lesson(for: screen)?.neighbours
-        else { return nil }
-        // `slack` nie jest tu ostrożnością na wszelki wypadek: moduły iStata
-        // zmieniają szerokość razem z liczbami w środku (samo „8 KB/s” kontra
-        // „1,0 MB/s” to kilkanaście punktów). Bez zapasu linia dobrana co do
-        // punktu spycha sąsiada z paska przy pierwszej takiej zmianie.
-        return screen.frame.maxX - edge - neighbours - Self.slack
+        guard let screen = barScreen(for: window) else { return nil }
+        return budget(on: screen)
+    }
+
+    /// Dwa niezależne ograniczenia, bierzemy ciaśniejsze:
+    ///
+    /// * z geometrii — od krawędzi rysowania do miejsca zajętego przez cudze
+    ///   ikony. Wymaga wcięcia w ekranie, więc na monitorze zewnętrznym nie ma
+    ///   go wcale;
+    /// * z obserwacji — najwęższa linia, przy której coś już wypadło z paska.
+    ///   To działa na każdym ekranie i jest tym, czego brakowało: bez budżetu
+    ///   jedynym sposobem sprawdzenia „czy zmieszczę się dłuższy” było wydłużyć
+    ///   się i zobaczyć, a to znaczyło wypychać ikony iStata w kółko.
+    ///
+    /// `slack` nie jest ostrożnością na wszelki wypadek: moduły iStata zmieniają
+    /// szerokość razem z liczbami w środku (samo „8 KB/s” kontra „1,0 MB/s” to
+    /// kilkanaście punktów). Bez zapasu linia dobrana co do punktu spycha
+    /// sąsiada z paska przy pierwszej takiej zmianie.
+    func budget(on screen: NSScreen) -> CGFloat? {
+        let lesson = lesson(for: screen)
+        var limits: [CGFloat] = []
+        if let edge = drawableEdge(screen: screen), let neighbours = lesson?.neighbours {
+            limits.append(screen.frame.maxX - edge - neighbours - Self.slack)
+        }
+        if let refused = lesson?.refusedWidth {
+            limits.append(refused - Self.slack)
+        }
+        return limits.min()
     }
 
     /// To samo, ale z kilku próbek. Dwa powody, oba zmierzone: po zmianie
