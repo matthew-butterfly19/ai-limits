@@ -278,7 +278,17 @@ final class AppModel: ObservableObject {
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil, queue: .main) { _ in
-                Task { @MainActor [weak self] in self?.rebuildTitle() }
+                Task { @MainActor [weak self] in
+                    // Tylko gdy pasek naprawdę przeniósł się na inny ekran.
+                    // Przełączenie aplikacji w obrębie jednego ekranu nie
+                    // zmienia dla dopasowania nic, a przeliczenie przerywa
+                    // trwający pomiar sąsiadów — przy otwieraniu okien
+                    // terminala takich przełączeń jest kilka pod rząd i linia
+                    // nigdy nie dochodziła do końca, tylko w kółko rozwijała
+                    // się i kurczyła.
+                    guard self?.fit.barMoved() == true else { return }
+                    self?.rebuildTitle()
+                }
             }
     }
 

@@ -98,17 +98,42 @@ final class MenuBarFit {
     /// wbudowanym kasowała wszystko, czego aplikacja dowiedziała się o
     /// zewnętrznym — a przy dwóch ekranach obie belki żyją równolegle.
     private var lessons: [String: Lesson] = [:]
+    /// Ekran, na którym była belka, gdy ostatnio o to pytano — patrz `barMoved`.
+    private var lastActiveSignature: String?
 
     private func signature(_ screen: NSScreen) -> String {
         "\(Int(screen.frame.minX))x\(Int(screen.frame.width))"
     }
 
+    /// Przedawnia się sama odmowa, nie cała lekcja.
+    ///
+    /// `hiddenAt` i `impossible` opisują krawędź, która zależy od menu
+    /// aplikacji na wierzchu — te muszą wygasać. `neighbours`, `items` i
+    /// `bestIndex` opisują cudze ikony na tej belce i tak się nie zmieniają.
+    /// Kasowanie wszystkiego naraz miało widoczny skutek: po pół godziny
+    /// znikał budżet, a bez budżetu przebieg zaczynał od najdłuższego
+    /// szczebla i schodził w dół po jednym, co 0,25 s. Dokładnie to, co widać
+    /// w pasku jako „rozwija się na pełno i kurczy w oczach”.
     private func lesson(for screen: NSScreen) -> Lesson? {
-        guard let lesson = lessons[signature(screen)] else { return nil }
-        return Date().timeIntervalSince(lesson.stamp) < Self.lessonLifetime ? lesson : nil
+        guard var lesson = lessons[signature(screen)] else { return nil }
+        if Date().timeIntervalSince(lesson.stamp) >= Self.lessonLifetime {
+            lesson.hiddenAt = nil
+            lesson.impossible = false
+        }
+        return lesson
     }
 
     private var verification: Task<Void, Never>?
+    /// Warianty, nad którymi pracuje trwający przebieg — patrz `verify`.
+    private var running: [String]?
+
+    /// Przebieg się skończył (sam albo przerwany). Sprząta po sobie tylko
+    /// wtedy, gdy w międzyczasie nikt nie zdążył zacząć nowego.
+    private func finished(_ variants: [String]) {
+        guard running == variants else { return }
+        running = nil
+        verification = nil
+    }
     /// Which rung was last handed out — where the fitting pass starts.
     private var currentIndex = 0
 
@@ -132,6 +157,13 @@ final class MenuBarFit {
     /// and every decision waits for the frame to hold still.
     func fit(_ variants: [String], apply: @escaping (String) -> Void) -> String {
         guard !variants.isEmpty else { return "" }
+        // Szczebel, który ta belka narysowała ostatnio — od razu, jeszcze przed
+        // jakimkolwiek pomiarem. Bez tego linia po przeniesieniu na ciaśniejszy
+        // ekran pokazuje się na pełno i dopiero po chwili kurczy w oczach:
+        // dokładnie ten objaw, o który poszło.
+        if let screen = activeScreen(), let best = lesson(for: screen)?.bestIndex {
+            currentIndex = min(best, variants.count - 1)
+        }
         let immediate = variants[min(currentIndex, variants.count - 1)]
         verify(variants, apply: apply)
         return immediate
@@ -142,9 +174,19 @@ final class MenuBarFit {
     /// until the item reappears. Cancels any pass still running, so a burst of
     /// refreshes leaves exactly one loop behind.
     func verify(_ variants: [String], apply: @escaping (String) -> Void, attempt: Int = 0) {
-        verification?.cancel()
         guard variants.count > 1 else { return }
+        // Ta sama lista co w trwającym przebiegu nie wnosi nic, a przerwanie
+        // kosztuje: pomiar sąsiadów trwa kilka sekund i przy odświeżeniu co
+        // 30 s, plus zdarzeniach z zewnątrz, nigdy nie dobiegał końca. Nie
+        // dobiegał — więc `neighbours` zostawało puste, więc nie było budżetu,
+        // więc następny przebieg znowu zaczynał od zera.
+        if let running, running == variants, let task = verification, !task.isCancelled {
+            return
+        }
+        verification?.cancel()
+        running = variants
         verification = Task { @MainActor [weak self] in
+            defer { self?.finished(variants) }
             // One copy of the item is chosen for the whole pass and never
             // re-resolved. Re-asking every sample let the choice alternate
             // between the two bars' copies, whose frames differ — so the frame
@@ -195,12 +237,17 @@ final class MenuBarFit {
                 variants.firstIndex { self.width(of: $0) <= budget } ?? (variants.count - 1)
             }
             // No budget to compute (a screen with no notch): start from the rung
-            // this bar drew last time, or from the full line if it has not been
-            // seen yet. Either way one step, not a crawl — the user should not
-            // watch the line grow a rung at a time every time they come back to
-            // a display, which is what starting from whatever length the other
-            // display forced looked like.
-            let wanted = min(wantedByBudget ?? self.rememberedIndex(for: window) ?? 0,
+            // this bar drew last time. Either way one step, not a crawl — the
+            // user should not watch the line grow a rung at a time every time
+            // they come back to a display, which is what starting from whatever
+            // length the other display forced looked like.
+            //
+            // A gdy i tego nie ma — zostajemy na szczeblu, który jest teraz, i
+            // niech go poprawi sondowanie. Skok na najdłuższy „na wszelki
+            // wypadek” kosztował widoczne rozwinięcie i zwijanie linii przy
+            // każdym przebiegu, a nie kupował nic: sondowanie w górę i tak
+            // dochodzi tam, gdzie jest miejsce.
+            let wanted = min(wantedByBudget ?? self.rememberedIndex(for: window) ?? index,
                              variants.count - 1)
             if wanted != index {
                 index = wanted
@@ -318,6 +365,7 @@ final class MenuBarFit {
     func reset() {
         verification?.cancel()
         verification = nil
+        running = nil
         lessons.removeAll()
         currentIndex = 0
         // Zmiana ekranów unieważnia też werdykt „nic się nie zmieści”:
@@ -546,6 +594,18 @@ final class MenuBarFit {
         // screen; AppKit upwards from its bottom.
         let centre = NSPoint(x: biggest.midX, y: primary.frame.maxY - biggest.midY)
         return NSScreen.screens.first { $0.frame.contains(centre) } ?? pointerScreen()
+    }
+
+    /// Czy od ostatniego pytania pasek menu przeniósł się na inny ekran.
+    ///
+    /// Przełączenie aplikacji w obrębie jednego ekranu nie zmienia dla
+    /// dopasowania nic, a wywołane wtedy przeliczenie przerywało trwający
+    /// pomiar. Przy otwieraniu okien terminala takich przełączeń jest kilka
+    /// pod rząd i to wystarczało, żeby linia nigdy nie doszła do końca.
+    func barMoved() -> Bool {
+        let now = activeScreen().map(signature)
+        defer { lastActiveSignature = now }
+        return now != lastActiveSignature
     }
 
     private func pointerScreen() -> NSScreen? {
