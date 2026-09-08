@@ -98,18 +98,12 @@ final class MenuBarFit {
         /// przy pierwszym podejściu: została nasza linia, zegar i Centrum
         /// sterowania.
         var neighbours: CGFloat?
-        /// Ile cudzych ikon mieści się na tej belce, gdy nikt nie wypadł.
-        /// Sama szerokość nie wystarcza jako kryterium: moduły iStata zmieniają
-        /// szerokość razem z liczbami, więc suma faluje o kilkadziesiąt punktów
-        /// i pomiar potrafi być zaniżony. Liczba ikon nie faluje wcale — jeśli
-        /// spadła, to znaczy, że nasza linia kogoś zepchnęła.
-        var items: Int?
         /// Najkrótszy szczebel, którego ta belka nie przyjęła bez szkody dla
         /// sąsiadów — czyli sufit dla sondowania w górę. W odróżnieniu od
-        /// `bestIndex` nie obniża się po sukcesie i nie przedawnia: skoro raz
-        /// zobaczyliśmy, że przy tej długości komuś ubyło ikony, nie ma powodu
-        /// sprawdzać tego co pół godziny od nowa. To jest jedyna rzecz, która
-        /// naprawdę kończy oddychanie paska.
+        /// `bestIndex` nie obniża się po sukcesie. Przedawnia się jak każda
+        /// odmowa: ikony w pasku przychodzą i odchodzą (wskaźnik nagrywania
+        /// ekranu, Time Machine), więc sufit z jednej chwili nie może być
+        /// wyrokiem na zawsze.
         var ceiling: Int?
         /// Najwęższa linia, przy której belka odmówiła albo zepchnęła sąsiada.
         /// Na ekranie bez wcięcia to jedyny sposób, żeby w ogóle mieć budżet:
@@ -136,8 +130,8 @@ final class MenuBarFit {
     /// Przedawnia się sama odmowa, nie cała lekcja.
     ///
     /// `hiddenAt` i `impossible` opisują krawędź, która zależy od menu
-    /// aplikacji na wierzchu — te muszą wygasać. `neighbours`, `items` i
-    /// `bestIndex` opisują cudze ikony na tej belce i tak się nie zmieniają.
+    /// aplikacji na wierzchu — te muszą wygasać. `neighbours` i `bestIndex`
+    /// opisują cudze ikony na tej belce i tak się nie zmieniają.
     /// Kasowanie wszystkiego naraz miało widoczny skutek: po pół godziny
     /// znikał budżet, a bez budżetu przebieg zaczynał od najdłuższego
     /// szczebla i schodził w dół po jednym, co 0,25 s. Dokładnie to, co widać
@@ -148,6 +142,7 @@ final class MenuBarFit {
             lesson.hiddenAt = nil
             lesson.impossible = false
             lesson.refusedWidth = nil
+            lesson.ceiling = nil
         }
         return lesson
     }
@@ -305,6 +300,12 @@ final class MenuBarFit {
             let floorIndex = max(0, variants.count - 2)
             let wanted = min(wantedByBudget ?? self.rememberedIndex(for: window) ?? index,
                              floorIndex)
+            // Ile ikon rysuje belka *zanim* cokolwiek zmienimy. To jest jedyny
+            // uczciwy punkt odniesienia dla „czy kogoś zepchnęliśmy”: nie
+            // historyczne maksimum, bo ikony przychodzą i odchodzą same z
+            // siebie — wskaźnik nagrywania ekranu zniknął, licznik spadł o
+            // jeden i linia zjechała do samego procentu, na stałe.
+            var countBefore = await self.settledItemCount(around: window)
             if wanted != index {
                 index = wanted
                 self.currentIndex = index
@@ -336,7 +337,13 @@ final class MenuBarFit {
                     return
                 }
                 var crowded = false
-                if drawn { crowded = await self.settledCrowded(around: window) }
+                var countNow: Int?
+                if drawn {
+                    countNow = await self.settledItemCount(around: window)
+                    if let before = countBefore, let now = countNow, now < before {
+                        crowded = true
+                    }
+                }
                 self.trace(String(format: "szczebel %d slot %.0f…%.0f  rysowany=%@%@",
                                   index, slot.minX, slot.maxX, drawn ? "tak" : "nie",
                                   crowded ? "  (sąsiad wypadł)" : ""))
@@ -352,12 +359,6 @@ final class MenuBarFit {
                     guard index < floorIndex else {
                         // Najkrótszy szczebel i nadal ciasno: krócej się nie da,
                         // a zniknięcie własnej linii niczego by nie naprawiło.
-                        // Skoro przy najkrótszej wersji ikon jest mniej, to nie
-                        // przez nas — więc to nowa prawda o tej belce, a nie
-                        // powód do skracania. Bez tej korekty jedna ikona, która
-                        // mignęła raz w pasku, zostawałaby w pamięci na zawsze i
-                        // od tej chwili każdy pomiar wyglądałby na ciasnotę.
-                        self.relearnItems(window: window)
                         self.learn(window: window, minX: slot.minX, rendered: true, index: index)
                         return
                     }
@@ -419,6 +420,9 @@ final class MenuBarFit {
                     }
                     index += 1
                 }
+                // Punktem odniesienia dla następnej oceny jest stan sprzed
+                // tej zmiany — czyli to, co przed chwilą zmierzyliśmy.
+                countBefore = countNow ?? countBefore
                 self.currentIndex = index
                 apply(variants[index])
                 guard let settled = await self.settledFrame(of: window) else { return }
@@ -498,38 +502,28 @@ final class MenuBarFit {
         lessons[signature(screen)] = updated
     }
 
-    /// To samo pytanie, ale zadane dopiero wtedy, gdy pasek przestał się
-    /// przestawiać.
+    /// Liczba ikon na belce, odczytana dopiero wtedy, gdy przestała się
+    /// zmieniać.
     ///
     /// Ikony wypchnięte przez dłuższą linię znikają z opóźnieniem, a wracają
     /// jeszcze wolniej — do dwóch sekund. Pytanie zadane od razu po zmianie
     /// szczebla opisuje więc szczebel poprzedni, nie ten. Dokładnie stąd brała
-    /// się wspinaczka, która przechodziła przez punkt spychania ikon i orientowała
-    /// się dopiero na samej górze, po czym zjeżdżała do najkrótszej wersji i
-    /// zaczynała od nowa — pasek skakał w kółko co kilka sekund.
-    private func settledCrowded(around window: NSWindow) async -> Bool {
-        guard let screen = barScreen(for: window),
-              let remembered = lesson(for: screen)?.items else { return false }
+    /// się wspinaczka, która przechodziła przez punkt spychania ikon i
+    /// orientowała się dopiero na samej górze, po czym zjeżdżała do najkrótszej
+    /// wersji i zaczynała od nowa.
+    private func settledItemCount(around window: NSWindow) async -> Int? {
         var last: Int?
         var quiet = 0
         for _ in 0..<12 {
             if let now = itemCount(around: window) {
                 quiet = (now == last) ? quiet + 1 : 0
                 last = now
-                if quiet >= 3 { return now < remembered }
+                if quiet >= 3 { return now }
             }
             try? await Task.sleep(nanoseconds: UInt64(Self.settleDelay * 1_000_000_000))
             guard !Task.isCancelled else { break }
         }
-        return (last ?? remembered) < remembered
-    }
-
-    /// Czy na belce jest teraz mniej ikon, niż potrafiła pomieścić.
-    private func crowded(around window: NSWindow) -> Bool {
-        guard let screen = barScreen(for: window),
-              let remembered = lesson(for: screen)?.items,
-              let now = itemCount(around: window) else { return false }
-        return now < remembered
+        return last
     }
 
     /// Ile elementów rysuje ta belka w tej chwili — z naszym włącznie.
@@ -559,26 +553,11 @@ final class MenuBarFit {
         lessons[signature(screen)] = updated
     }
 
-    /// Przyjmuje bieżącą liczbę ikon jako nową prawdę o belce — wołane tylko
-    /// wtedy, gdy nasza linia jest najkrótsza z możliwych, więc na pewno nie
-    /// jest przyczyną tego, że komuś ubyło.
-    private func relearnItems(window: NSWindow) {
-        guard let screen = barScreen(for: window), let count = itemCount(around: window) else {
-            return
-        }
-        var updated = lesson(for: screen) ?? Lesson()
-        updated.items = count
-        lessons[signature(screen)] = updated
-    }
-
     /// Maksimum z obserwacji — patrz komentarz przy `Lesson.neighbours`.
     private func learnNeighbours(window: NSWindow, width: CGFloat) {
         guard let screen = barScreen(for: window) else { return }
         var updated = lesson(for: screen) ?? Lesson()
         updated.neighbours = max(updated.neighbours ?? width, width)
-        if let count = itemCount(around: window) {
-            updated.items = max(updated.items ?? count, count)
-        }
         lessons[signature(screen)] = updated
     }
 
