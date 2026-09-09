@@ -25,6 +25,14 @@ Ikona zębatki obok niego chowa dwa ustawienia: co ma prowadzić w pasku menu (o
 albo oba) i które aplikacje w ogóle dostają tam segment — przydatne, gdy jedna z nich milczy
 tygodniami i tylko zajmuje miejsce.
 
+Ostatnia sekcja, **AI Review Platform**, nie liczy kosztu, tylko wydaje werdykt o kluczu
+OpenRoutera, którym płaci platforma recenzji: *klucz działa* / *limit na wyczerpaniu* /
+*limit wyczerpany*, *wyłączony*, *wygasł* — plus pasek tygodniowego limitu i ile z niego
+zostało. Powód jest konkretny: wyczerpany limit nie zatrzymuje platformy, tylko po cichu
+wyłącza skautów, a recenzja i tak się publikuje — pusta, nie do odróżnienia od „nic nie
+znaleziono”. Sekcja pojawia się po wskazaniu klucza w *OpenRouter…* (przy jednym kluczu z
+„review” w nazwie wskazuje się sam) i korzysta z tego samego management key co Harness.
+
 ## Kiedy w pasku brakuje miejsca
 
 macOS nie skraca elementu paska menu, który się nie mieści — **chowa go w całości**, razem z

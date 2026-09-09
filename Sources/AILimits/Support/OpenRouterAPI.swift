@@ -42,6 +42,43 @@ enum OpenRouterAPI {
         var usageDaily: Double?
         /// Wydatek od stworzenia klucza — cały czas, nie tylko dziś.
         var usage: Double?
+        /// Pola, z których składa się „czy ten klucz jeszcze działa”: klucz
+        /// wyłączony ręcznie, limit wydatków i ile z niego zostało, jak często
+        /// limit się zeruje (`weekly`/`monthly`/nil — jednorazowy) i data
+        /// wygaśnięcia. Wszystkie opcjonalne, bo klucz bez limitu ma tu same
+        /// `null`e.
+        var disabled: Bool?
+        var limit: Double?
+        var limitRemaining: Double?
+        var limitReset: String?
+        var usageWeekly: Double?
+        var usageMonthly: Double?
+        var expiresAt: String?
+
+        /// Wydatek w bieżącym okresie limitu — tygodniowym albo miesięcznym,
+        /// zależnie od tego, jak klucz się zeruje. Dla klucza bez okresu
+        /// (limit jednorazowy albo brak limitu) — od początku.
+        var usageInPeriod: Double? {
+            switch limitReset {
+            case "weekly": return usageWeekly
+            case "monthly": return usageMonthly
+            default: return usage
+            }
+        }
+
+        /// Ile procent limitu poszło. `nil` bez limitu — wtedy nie ma czego
+        /// mierzyć i pasek nie ma sensu.
+        var limitUsedPercent: Double? {
+            guard let limit, limit > 0, let remaining = limitRemaining else { return nil }
+            return max(0, min(100, (limit - remaining) / limit * 100))
+        }
+
+        /// Data wygaśnięcia, jeśli OpenRouter ją podał (ISO 8601).
+        var expiryDate: Date? {
+            guard let expiresAt else { return nil }
+            return ISO8601DateFormatter.withFractions.date(from: expiresAt)
+                ?? ISO8601DateFormatter().date(from: expiresAt)
+        }
     }
 
     /// Odpowiedź API dla /keys może być listą lub obiektem z polem `data`.
@@ -181,6 +218,7 @@ enum OpenRouterAPI {
 
     // MARK: - helpers
 
+
     private static func checkHTTPStatus(_ http: HTTPURLResponse) throws {
         switch http.statusCode {
         case 200: return
@@ -219,4 +257,14 @@ enum OpenRouterAPI {
             }
         }
     }
+}
+
+private extension ISO8601DateFormatter {
+    /// OpenRouter pisze daty z ułamkami sekund (`2026-06-23T13:35:16.186Z`),
+    /// których domyślny formatter nie przyjmuje.
+    static let withFractions: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 }

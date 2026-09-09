@@ -12,6 +12,7 @@ struct SettingsWindow: View {
     @State private var isSaving = false
     /// Lokalna kopia wybranego hasha — synchronizowana z modelem przy zmianie.
     @State private var localSelectedHash = ""
+    @State private var localReviewHash = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -40,15 +41,19 @@ struct SettingsWindow: View {
             if model.openRouterKeyConfigured {
                 Divider()
                 keySelectionView
+                Divider()
+                reviewSelectionView
             }
 
             Spacer()
         }
         .padding(20)
-        .frame(width: 500, height: 380)
+        .frame(width: 500, height: 520)
         .background(Palette.surface)
+        .onChange(of: model.reviewKeyHash) { _, hash in localReviewHash = hash ?? "" }
         .onAppear {
             localSelectedHash = model.openRouterSelectedHash ?? ""
+            localReviewHash = model.reviewKeyHash ?? ""
             if model.openRouterKeyConfigured, model.openRouterKeys.isEmpty {
                 Task { await model.refreshOpenRouterKeys() }
             }
@@ -151,6 +156,46 @@ struct SettingsWindow: View {
                 .onChange(of: localSelectedHash) { _, hash in
                     guard !hash.isEmpty else { return }
                     model.selectOpenRouterKey(hash: hash)
+                }
+            }
+        }
+    }
+
+    // MARK: - review platform
+
+    /// Ten sam management key widzi wszystkie klucze konta, więc wybór klucza
+    /// platformy review to tylko wskazanie, który to. Bez wyboru sekcja w
+    /// panelu nie istnieje — nie pilnuje niczego, więc nie udaje, że pilnuje.
+    @ViewBuilder private var reviewSelectionView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Który klucz API to AI Review Platform?")
+                .font(.system(size: 12, weight: .semibold))
+            Text("""
+            Panel pokaże, czy klucz działa i ile zostało z jego limitu. Wyczerpany \
+            limit nie zatrzymuje platformy — recenzje wychodzą wtedy puste.
+            """)
+                .font(.system(size: 11))
+                .foregroundStyle(Palette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if model.openRouterKeys.isEmpty {
+                Text("Najpierw lista kluczy — patrz wyżej.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.muted)
+            } else {
+                Picker("Klucz platformy", selection: $localReviewHash) {
+                    Text("— żaden —").tag("")
+                    ForEach(model.openRouterKeys, id: \.hash) { key in
+                        let masked = key.label ?? key.hash.prefix(12).description
+                        let text = key.name.map { "\($0) — \(masked)" } ?? masked
+                        Text(text).tag(key.hash)
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(.system(size: 12))
+                .onChange(of: localReviewHash) { _, hash in
+                    guard hash != (model.reviewKeyHash ?? "") else { return }
+                    model.selectReviewKey(hash: hash)
                 }
             }
         }

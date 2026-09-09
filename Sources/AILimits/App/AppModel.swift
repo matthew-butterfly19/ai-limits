@@ -46,6 +46,22 @@ final class AppModel: ObservableObject {
     @Published var openRouterKeysLastFetch: Date?
 
     private static let selectedHashKey = "openRouterSelectedKeyHash"
+    /// Klucz API, którym rozlicza się AI Review Platform — osobny od klucza
+    /// Harnessa, ten sam management key go widzi. Sekcja w panelu nie liczy
+    /// kosztów, tylko sprawdza, czy klucz jeszcze działa: przekroczony limit
+    /// tygodniowy zabija tam lane'y skautów po cichu, a recenzja i tak się
+    /// publikuje — pusta.
+    @Published var reviewKeyHash: String?
+    private static let reviewHashKey = "openRouterReviewKeyHash"
+    /// Domyślne dopasowanie po nazwie, gdy użytkownik nic jeszcze nie wybrał.
+    private static let reviewKeyNameHint = "review"
+
+    /// Klucz platformy review z ostatniej listy `/keys` — albo nil, gdy nie
+    /// wybrany lub zniknął z konta (to też jest informacja).
+    var reviewKey: OpenRouterAPI.KeyInfo? {
+        guard let hash = reviewKeyHash else { return nil }
+        return openRouterKeys.first { $0.hash == hash }
+    }
     /// `/activity` wraca tylko zakończone dni UTC — ta historia zmienia się
     /// raz dziennie, więc rzadki cache wystarcza.
     static let openRouterCacheTTL: TimeInterval = 6 * 3600
@@ -221,6 +237,7 @@ final class AppModel: ObservableObject {
         // przy każdym starcie.
         openRouterKeyConfigured = OpenRouterKey.exists()
         openRouterSelectedHash = UserDefaults.standard.string(forKey: Self.selectedHashKey)
+        reviewKeyHash = UserDefaults.standard.string(forKey: Self.reviewHashKey)
         loadCachedSnapshots()
         loadCachedOpenRouterCosts()
         rebuildTitle()
@@ -383,10 +400,23 @@ final class AppModel: ObservableObject {
         openRouterKeys = []
         openRouterSelectedHash = nil
         UserDefaults.standard.removeObject(forKey: Self.selectedHashKey)
+        reviewKeyHash = nil
+        UserDefaults.standard.removeObject(forKey: Self.reviewHashKey)
         openRouterActivity = []
         openRouterLastFetch = nil
         openRouterError = nil
         try? FileManager.default.removeItem(at: openRouterCacheURL)
+    }
+
+    /// Użytkownik wybrał, który klucz z listy to AI Review Platform. Pusty
+    /// hash znaczy „żaden” — sekcja znika z panelu.
+    func selectReviewKey(hash: String) {
+        reviewKeyHash = hash.isEmpty ? nil : hash
+        if hash.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.reviewHashKey)
+        } else {
+            UserDefaults.standard.set(hash, forKey: Self.reviewHashKey)
+        }
     }
 
     /// Użytkownik wybrał, który klucz z listy to Harness.
@@ -431,6 +461,15 @@ final class AppModel: ObservableObject {
             openRouterKeys = keys
             openRouterKeysLastFetch = Date()
             openRouterError = nil
+            // Pierwszy raz: jeśli na koncie jest dokładnie jeden klucz z
+            // „review” w nazwie, to on. Zgadywanie przy dwóch pasujących
+            // pokazałoby limity cudzego klucza pod właściwym nagłówkiem.
+            if reviewKeyHash == nil, UserDefaults.standard.object(forKey: Self.reviewHashKey) == nil {
+                let matching = keys.filter {
+                    $0.name?.localizedCaseInsensitiveContains(Self.reviewKeyNameHint) == true
+                }
+                if matching.count == 1, let only = matching.first { selectReviewKey(hash: only.hash) }
+            }
             // `usage_daily` just arrived (or changed) — the bar shouldn't
             // wait for the next periodic tick to show it.
             rebuildTitle()

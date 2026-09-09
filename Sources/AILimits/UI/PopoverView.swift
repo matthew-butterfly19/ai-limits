@@ -23,6 +23,13 @@ struct PopoverView: View {
                 AppSection(app: app)
             }
 
+            // Tylko z wybranym kluczem: bez management key nie ma skąd wziąć
+            // werdyktu, a sekcja „brak danych” niczego by nie pilnowała.
+            if model.openRouterKeyConfigured, model.reviewKeyHash != nil {
+                Divider()
+                ReviewSection()
+            }
+
             Divider()
             footer
         }
