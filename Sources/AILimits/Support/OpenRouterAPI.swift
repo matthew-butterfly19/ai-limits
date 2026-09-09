@@ -79,6 +79,35 @@ enum OpenRouterAPI {
             return ISO8601DateFormatter.withFractions.date(from: expiresAt)
                 ?? ISO8601DateFormatter().date(from: expiresAt)
         }
+
+        /// Czy tym kluczem da się jeszcze płacić. Jedna odpowiedź dla panelu
+        /// i paska menu, żeby obie nigdy nie mówiły czego innego.
+        enum Health {
+            case ok
+            /// Limit ≥ `lowWatermark` — jeszcze działa, ale nie na długo.
+            case low
+            case exhausted, disabled, expired
+
+            /// Klucz, którym platforma już nie zapłaci — to jest alarm.
+            var isDead: Bool {
+                switch self {
+                case .ok, .low: return false
+                case .exhausted, .disabled, .expired: return true
+                }
+            }
+        }
+
+        /// Od którego procenta limitu „mało”. Tydzień skautów kosztuje mniej
+        /// więcej stałą kwotę, więc 80 % w środku tygodnia to już problem.
+        static let lowWatermark: Double = 80
+
+        var health: Health {
+            if disabled == true { return .disabled }
+            if let expiry = expiryDate, expiry < Date() { return .expired }
+            if let remaining = limitRemaining, limit != nil, remaining <= 0 { return .exhausted }
+            if let percent = limitUsedPercent, percent >= Self.lowWatermark { return .low }
+            return .ok
+        }
     }
 
     /// Odpowiedź API dla /keys może być listą lub obiektem z polem `data`.

@@ -12,10 +12,6 @@ import SwiftUI
 struct ReviewSection: View {
     @EnvironmentObject private var model: AppModel
 
-    /// Od którego procenta limitu zaczynamy ostrzegać. Tydzień skautów kosztuje
-    /// mniej więcej stałą kwotę, więc 80 % w środku tygodnia to już problem.
-    private static let warnAt: Double = 80
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
@@ -68,49 +64,37 @@ struct ReviewSection: View {
 
     // MARK: - werdykt
 
-    private enum Verdict {
-        case ok, low, exhausted, disabled, expired
-
-        var text: String {
-            switch self {
-            case .ok: return "klucz działa"
-            case .low: return "limit na wyczerpaniu"
-            case .exhausted: return "limit wyczerpany — recenzje wychodzą puste"
-            case .disabled: return "klucz wyłączony w OpenRouterze"
-            case .expired: return "klucz wygasł"
-            }
-        }
-
-        var color: Color {
-            switch self {
-            case .ok: return Palette.good
-            case .low: return Palette.warning
-            case .exhausted, .disabled, .expired: return Palette.critical
-            }
-        }
-
-        var symbol: String {
-            switch self {
-            case .ok: return "checkmark.circle.fill"
-            case .low: return "exclamationmark.triangle.fill"
-            case .exhausted, .disabled, .expired: return "xmark.octagon.fill"
-            }
+    private func text(_ health: OpenRouterAPI.KeyInfo.Health) -> String {
+        switch health {
+        case .ok: return "klucz działa"
+        case .low: return "limit na wyczerpaniu"
+        case .exhausted: return "limit wyczerpany — recenzje wychodzą puste"
+        case .disabled: return "klucz wyłączony w OpenRouterze"
+        case .expired: return "klucz wygasł"
         }
     }
 
-    private func verdict(_ key: OpenRouterAPI.KeyInfo) -> Verdict {
-        if key.disabled == true { return .disabled }
-        if let expiry = key.expiryDate, expiry < Date() { return .expired }
-        if let remaining = key.limitRemaining, key.limit != nil, remaining <= 0 { return .exhausted }
-        if let percent = key.limitUsedPercent, percent >= Self.warnAt { return .low }
-        return .ok
+    private func color(_ health: OpenRouterAPI.KeyInfo.Health) -> Color {
+        switch health {
+        case .ok: return Palette.good
+        case .low: return Palette.warning
+        case .exhausted, .disabled, .expired: return Palette.critical
+        }
+    }
+
+    private func symbol(_ health: OpenRouterAPI.KeyInfo.Health) -> String {
+        switch health {
+        case .ok: return "checkmark.circle.fill"
+        case .low: return "exclamationmark.triangle.fill"
+        case .exhausted, .disabled, .expired: return "xmark.octagon.fill"
+        }
     }
 
     private func verdict(for key: OpenRouterAPI.KeyInfo) -> some View {
-        let verdict = verdict(key)
-        return Label(verdict.text, systemImage: verdict.symbol)
+        let health = key.health
+        return Label(text(health), systemImage: symbol(health))
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(verdict.color)
+            .foregroundStyle(color(health))
             .help("""
                   Sprawdzane z listy kluczy OpenRoutera (management key): czy klucz nie \
                   jest wyłączony, czy nie wygasł i ile zostało z limitu wydatków. \

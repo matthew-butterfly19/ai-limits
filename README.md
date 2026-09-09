@@ -32,6 +32,9 @@ zostało. Powód jest konkretny: wyczerpany limit nie zatrzymuje platformy, tylk
 wyłącza skautów, a recenzja i tak się publikuje — pusta, nie do odróżnienia od „nic nie
 znaleziono”. Sekcja pojawia się po wskazaniu klucza w *OpenRouter…* (przy jednym kluczu z
 „review” w nazwie wskazuje się sam) i korzysta z tego samego management key co Harness.
+W pasku menu ten sam klucz to segment `Review 12,1$/d` na końcu linii — jak koszt Harnessa,
+wyłączany pod zębatką. Na drabinie skracania odpada przed pierwszą aplikacją, ale martwy
+klucz zostawia `Review ⚠`, którego skracanie nie zdejmuje.
 
 ## Kiedy w pasku brakuje miejsca
 

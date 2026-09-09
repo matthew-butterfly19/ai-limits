@@ -40,6 +40,11 @@ enum MenuBarTitle {
         var totals: [AppKind: TokenTotals] = [:]
         var forecasts: [AppKind: [Forecast]] = [:]
         var todayUsage: [AppKind: Double] = [:]
+        /// AI Review Platform: dzisiejszy wydatek jej klucza i czy klucz
+        /// jeszcze płaci. To nie jest aplikacja z logami ani limitem — tylko
+        /// jedna liczba z OpenRoutera, pokazywana tak samo jak koszt Harnessa.
+        var reviewToday: Double?
+        var reviewDead = false
         var now = Date()
     }
 
@@ -66,12 +71,18 @@ enum MenuBarTitle {
         /// Which apps get a segment. Order of appearance is always
         /// `AppKind.allCases`; this set only says who is present.
         var apps: [AppKind] = AppKind.allCases
+        /// Segment AI Review Platform na końcu linii. Bez własnego limitu i
+        /// bez prognozy, więc na drabinie odpada przed pierwszą aplikacją.
+        var showReview = true
         var truncated = false
     }
 
     static func render(_ inputs: Inputs, style: Style = Style()) -> String {
-        let segments = AppKind.allCases.filter(style.apps.contains).compactMap { app in
+        var segments = AppKind.allCases.filter(style.apps.contains).compactMap { app in
             segment(app: app, inputs: inputs, style: style)
+        }
+        if let review = reviewSegment(inputs, style: style) {
+            segments.append(review)
         }
         guard !segments.isEmpty else { return "AI limits …" }
         return segments.joined(separator: style.separator)
@@ -111,6 +122,14 @@ enum MenuBarTitle {
         }
         current.showTimeLeft = false
         add()
+        // Review odpada przed pierwszą aplikacją: nie ma limitu z resetem,
+        // więc nigdy nie jest tym, co zaraz się skończy — chyba że jej klucz
+        // umarł, ale wtedy zostaje sam „⚠”, bo alarm nie schodzi z linii.
+        if current.showReview, reviewSegment(inputs, style: current) != nil {
+            current.showReview = false
+            current.truncated = !inputs.reviewDead
+            add()
+        }
 
         // Only apps that actually render something can be dropped — an app
         // that is silent (no limits read yet, no tokens) is already absent, and
@@ -200,6 +219,17 @@ enum MenuBarTitle {
         }
     }
 
+    /// `Review 11,3$/d`, jak koszt Harnessa. Martwy klucz zostawia sam alarm
+    /// nawet wtedy, gdy drabina zdjęła już cały segment: to jest ta jedna
+    /// informacja, po którą ten segment w ogóle istnieje.
+    private static func reviewSegment(_ inputs: Inputs, style: Style) -> String? {
+        guard let usage = inputs.reviewToday else { return nil }
+        let alarm = inputs.reviewDead ? " ⚠" : ""
+        guard style.showReview else { return inputs.reviewDead ? "Review ⚠" : nil }
+        let name = style.showNames ? "Review " : ""
+        return "\(name)\(usage < 0.1 ? "<0.1" : Format.decimal(usage, places: 1))$/d\(alarm)"
+    }
+
     private static func segment(app: AppKind, inputs: Inputs, style: Style) -> String? {
         var parts: [String] = []
         // An app with no vendor rate-limit window (dsh) has no percentage to
@@ -269,6 +299,7 @@ enum MenuBarDefaults {
     static let autoShorten = "menuBarAutoShorten"
     static let dockFallback = "menuBarDockFallback"
     static let visibleApps = "menuBarVisibleApps"
+    static let showReview = "menuBarShowReview"
 
     /// The saved preferences as a style. Missing keys mean "never touched the
     /// settings" and fall back to the same defaults the app starts with.
@@ -282,6 +313,7 @@ enum MenuBarDefaults {
                                   show7d: flag(show7d, false),
                                   showForecast: flag(showForecast, true),
                                   showTokens: flag(showTokens, false),
-                                  apps: AppKind.allCases.filter(apps.contains))
+                                  apps: AppKind.allCases.filter(apps.contains),
+                                  showReview: flag(showReview, true))
     }
 }

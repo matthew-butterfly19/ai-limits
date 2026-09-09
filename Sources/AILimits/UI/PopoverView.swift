@@ -103,6 +103,10 @@ struct PopoverView: View {
             ForEach(AppKind.allCases, id: \.self) { app in
                 Toggle(app.display, isOn: visibleBinding(for: app))
             }
+            if model.reviewKeyHash != nil {
+                Toggle("AI Review Platform", isOn: $model.showReviewInBar)
+                    .help("Dzisiejszy wydatek klucza platformy recenzji, jak koszt Harnessa. Martwy klucz to „⚠”, którego skracanie nie zdejmuje.")
+            }
         }
         .toggleStyle(.checkbox)
         .font(.system(size: 12))

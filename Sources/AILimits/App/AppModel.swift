@@ -170,6 +170,13 @@ final class AppModel: ObservableObject {
         }
     }
     private static let visibleAppsKey = MenuBarDefaults.visibleApps
+    /// Segment AI Review Platform w pasku — dzisiejszy wydatek jej klucza.
+    @Published var showReviewInBar = true {
+        didSet {
+            UserDefaults.standard.set(showReviewInBar, forKey: MenuBarDefaults.showReview)
+            rebuildTitle()
+        }
+    }
 
     /// The screen ticks far more often than the network does.
     ///
@@ -229,6 +236,9 @@ final class AppModel: ObservableObject {
         // No saved preference yet (fresh install, or upgrading from a build
         // before this existed) means "everything visible" — the checkbox
         // starts as a no-op, not as an unexplained app disappearing.
+        if UserDefaults.standard.object(forKey: MenuBarDefaults.showReview) != nil {
+            showReviewInBar = UserDefaults.standard.bool(forKey: MenuBarDefaults.showReview)
+        }
         if let saved = UserDefaults.standard.array(forKey: Self.visibleAppsKey) as? [String] {
             visibleApps = Set(saved.compactMap(AppKind.init(rawValue:)))
         }
@@ -417,6 +427,7 @@ final class AppModel: ObservableObject {
         } else {
             UserDefaults.standard.set(hash, forKey: Self.reviewHashKey)
         }
+        rebuildTitle()
     }
 
     /// Użytkownik wybrał, który klucz z listy to Harness.
@@ -559,7 +570,9 @@ final class AppModel: ObservableObject {
         var todayUsage: [AppKind: Double] = [:]
         if let today = openRouterTodayUsage { todayUsage[.dsh] = today }
         return MenuBarTitle.Inputs(snapshots: snapshots, totals: windowTotals,
-                                   forecasts: forecasts, todayUsage: todayUsage)
+                                   forecasts: forecasts, todayUsage: todayUsage,
+                                   reviewToday: reviewKey?.usageDaily,
+                                   reviewDead: reviewKey?.health.isDead ?? false)
     }
 
     private func rebuildTitle() {
@@ -567,7 +580,8 @@ final class AppModel: ObservableObject {
         let style = MenuBarTitle.Style(show5h: show5hInBar, show7d: show7dInBar,
                                        showForecast: showForecastInBar,
                                        showTokens: showTokensInBar,
-                                       apps: AppKind.allCases.filter(visibleApps.contains))
+                                       apps: AppKind.allCases.filter(visibleApps.contains),
+                                       showReview: showReviewInBar)
         defer { updateDock() }
         guard autoShortenInBar else {
             menuBarTitle = MenuBarTitle.render(inputs, style: style)
