@@ -236,25 +236,28 @@ struct AppSection: View {
         }
     }
 
-    /// Ta sama siatka kolumn co wiersz okna — procent i pasek stoją w tych
-    /// samych miejscach, żeby dało się je porównać wzrokiem — tylko cieńsza
-    /// i wcięta, bo to limit podrzędny.
+    /// Dokładnie ta sama siatka kolumn co wiersz okna: nazwa przy lewej
+    /// krawędzi, procent, pasek i czas do resetu w tych samych miejscach.
+    /// Nazwa modelu bywa dłuższa niż „7d", więc etykieta i procent dzielą
+    /// pierwsze 88 pt — etykieta od lewej, procent dosunięty do prawej —
+    /// zamiast stać w dwóch sztywnych kolumnach, które by się rozjechały.
     private func scopedRow(_ limit: ScopedLimit) -> some View {
         HStack(spacing: 10) {
-            Text(limit.label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Palette.muted)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(width: 68, alignment: .leading)
-                .padding(.leading, 20)
-            Text(Format.percent(limit.window.pct))
-                .font(.system(size: 13, weight: .semibold))
-                .monospacedDigit()
-                .frame(width: 52, alignment: .trailing)
-            MeterBar(percent: limit.window.pct, height: 6)
+            HStack(spacing: 6) {
+                Text(limit.label)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                Text(Format.percent(limit.window.pct))
+                    .font(.system(size: 17, weight: .semibold))
+                    .monospacedDigit()
+            }
+            .frame(width: 88, alignment: .leading)
+            MeterBar(percent: limit.window.pct, height: 10)
             Text(Format.timeLeft(limit.window.timeLeft()))
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .monospacedDigit()
                 .foregroundStyle(Palette.muted)
                 .frame(width: 58, alignment: .trailing)
