@@ -18,6 +18,12 @@ Kliknięcie rozwija panel z licznikami obu okien, werdyktem („starczy" / „na
 procent jest walutą, w której się płaci. Na dole porównanie z tym samym momentem tydzień
 wcześniej.
 
+Pod oknem tygodniowym Claude'a wiszą jeszcze **sub-limity mierzone per model** (dziś
+`Fable`) — ten sam procent, pasek i czas do resetu, tylko wcięte i cieńsze, bo to limit
+wewnątrz limitu: można wyczerpać model, mając zapas w oknie ogólnym. Świadomie tylko w
+panelu, nigdy w pasku menu — tam liczą się dwie liczby, które muszą być widoczne bez
+klikania.
+
 Przycisk *Szczegóły…* otwiera okno z wykresami: tokeny w godzinach, tydzień do tygodnia,
 przebieg wykorzystania limitów, tabela modeli i rozwijana lista wątków.
 

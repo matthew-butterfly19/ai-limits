@@ -183,9 +183,10 @@ struct AppSection: View {
 
     @ViewBuilder private var windows: some View {
         let sorted = (snapshot?.windows ?? []).sorted { $0.minutes < $1.minutes }
+        let scoped = scopedLimits
         if app == .dsh {
             dshToday
-        } else if sorted.isEmpty {
+        } else if sorted.isEmpty, scoped.isEmpty {
             Text("brak danych o limitach").font(.system(size: 12)).foregroundStyle(Palette.muted)
         } else {
             VStack(alignment: .leading, spacing: 12) {
@@ -210,10 +211,60 @@ struct AppSection: View {
                         if let forecast = model.forecasts[app]?.first(where: { $0.minutes == window.minutes }) {
                             ForecastLine(forecast: forecast).padding(.leading, 36)
                         }
+                        // Sub-limity tego samego okna wiszą pod nim, bo to limit
+                        // wewnątrz limitu — nie osobna pozycja.
+                        ForEach(scoped.filter { $0.window.minutes == window.minutes }) { limit in
+                            scopedRow(limit)
+                        }
                     }
+                }
+                // Gdyby dostawca podał sub-limit w oknie, którego nie ma wyżej,
+                // i tak go pokażemy — lepiej luzem niż wcale.
+                ForEach(scoped.filter { limit in !sorted.contains { $0.minutes == limit.window.minutes } }) { limit in
+                    scopedRow(limit)
                 }
             }
         }
+    }
+
+    /// Okna, które dostawca mierzy osobno per model (u Claude'a np. Fable
+    /// w oknie tygodniowym). Świadomie tylko tutaj, po kliknięciu: na pasku
+    /// zabierałyby miejsce dwóm liczbom, które naprawdę trzeba widzieć.
+    private var scopedLimits: [ScopedLimit] {
+        (snapshot?.scoped ?? []).sorted {
+            ($0.window.minutes, $0.label) < ($1.window.minutes, $1.label)
+        }
+    }
+
+    /// Ta sama siatka kolumn co wiersz okna — procent i pasek stoją w tych
+    /// samych miejscach, żeby dało się je porównać wzrokiem — tylko cieńsza
+    /// i wcięta, bo to limit podrzędny.
+    private func scopedRow(_ limit: ScopedLimit) -> some View {
+        HStack(spacing: 10) {
+            Text(limit.label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Palette.muted)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: 68, alignment: .leading)
+                .padding(.leading, 20)
+            Text(Format.percent(limit.window.pct))
+                .font(.system(size: 13, weight: .semibold))
+                .monospacedDigit()
+                .frame(width: 52, alignment: .trailing)
+            MeterBar(percent: limit.window.pct, height: 6)
+            Text(Format.timeLeft(limit.window.timeLeft()))
+                .font(.system(size: 11))
+                .monospacedDigit()
+                .foregroundStyle(Palette.muted)
+                .frame(width: 58, alignment: .trailing)
+        }
+        .help("""
+              Osobny licznik dla modelu \(limit.label) w oknie \
+              \(Format.windowName(limit.window.minutes)). Wlicza się w limit \
+              powyżej, ale ma własny próg — można wyczerpać ten, mając zapas \
+              w oknie ogólnym. Celowo tylko w panelu, nie na pasku.
+              """)
     }
 
     /// Dsh nie ma okna limitu, więc zamiast paska % pokazujemy jedyną liczbę,
